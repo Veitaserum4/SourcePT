@@ -28,13 +28,13 @@
 namespace proxy::d3d {
 namespace {
 
-// Entropy : Zero 2 runs on D3D9Ex and uploads UI/particle textures through
-// surfaces; the extra hooks below are for it alone, the other games keep
-// their original behaviour.
-#if defined(PROXY_GAME_EZ2)
-constexpr bool kEz2 = true;
+// A stock engine (Entropy : Zero 2, Black Mesa) runs on D3D9Ex and uploads
+// UI/particle textures through surfaces; the extra hooks below are for it
+// alone, the other games keep their original behaviour.
+#if defined(PROXY_STOCK_ENGINE)
+constexpr bool kStockEngine = true;
 #else
-constexpr bool kEz2 = false;
+constexpr bool kStockEngine = false;
 #endif
 
 // Vtable slots.
@@ -105,6 +105,13 @@ enum : unsigned {
 };
 
 void **vtableOf(void *object) { return *static_cast<void ***>(object); }
+
+// The game's device: the first to present a real back buffer. Black Mesa's
+// menus have another, Qt's (ANGLE loads the same d3d9.dll), whose calls go
+// straight to D3D9: its draws are not the game's, and its presents must
+// happen (they submit the menus' rendering).
+IDirect3DDevice9 *g_gameDevice = nullptr;
+bool foreign(IDirect3DDevice9 *dev) { return kStockEngine && g_gameDevice && dev != g_gameDevice; }
 
 // Replaces a vtable entry; returns the previous function.
 void *patch(void **vtable, unsigned slot, void *hook) {
@@ -401,6 +408,8 @@ CreateVolumeTextureFn g_createVolumeTexture = nullptr;
 HRESULT STDMETHODCALLTYPE createVolumeTexture(IDirect3DDevice9 *dev, UINT width, UINT height, UINT depth, UINT levels,
                                               DWORD usage, D3DFORMAT format, D3DPOOL pool,
                                               IDirect3DVolumeTexture9 **out, HANDLE *shared) {
+  if (foreign(dev))
+    return g_createVolumeTexture(dev, width, height, depth, levels, usage, format, pool, out, shared);
   const HRESULT hr = g_createVolumeTexture(dev, width, height, depth, levels, usage, format, pool, out, shared);
   if (SUCCEEDED(hr) && out && *out) {
     {
@@ -615,7 +624,7 @@ IDirect3DTexture9 *levelZeroTexture(IDirect3DSurface9 *surface) {
   if (FAILED(surface->GetContainer(IID_IDirect3DTexture9, reinterpret_cast<void **>(&texture))) || !texture)
     return nullptr;
   texture->Release(); // the texture outlives its surfaces' use here
-  if (kEz2)
+  if (kStockEngine)
     hookTexture(texture);
   D3DSURFACE_DESC level0, mine;
   if (FAILED(texture->GetLevelDesc(0, &level0)) || FAILED(surface->GetDesc(&mine)) || level0.Width != mine.Width ||
@@ -1080,7 +1089,11 @@ void finish(IDirect3DDevice9 *dev);
 void release();
 } // namespace skycap
 
+// The device whose back buffer g_backBuffer is.
+IDirect3DDevice9 *g_backBufferDevice = nullptr;
+
 void refreshBackBuffer(IDirect3DDevice9 *dev) {
+  g_backBufferDevice = dev;
   IDirect3DSurface9 *bb = nullptr;
   if (SUCCEEDED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) && bb) {
     g_backBuffer = bb; // identity only; the device keeps it alive
@@ -1091,9 +1104,26 @@ void refreshBackBuffer(IDirect3DDevice9 *dev) {
 
 HRESULT STDMETHODCALLTYPE present(IDirect3DDevice9 *dev, const RECT *src, const RECT *dst, HWND wnd,
                                   const RGNDATA *dirty) {
+  if (foreign(dev))
+    return g_present(dev, src, dst, wnd, dirty);
+  if (kStockEngine && !g_gameDevice) {
+    IDirect3DSurface9 *bb = nullptr;
+    D3DSURFACE_DESC desc = {};
+    if (SUCCEEDED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) && bb) {
+      bb->GetDesc(&desc);
+      bb->Release();
+    }
+    if (desc.Width < 64 || desc.Height < 64)
+      return g_present(dev, src, dst, wnd, dirty); // a probe's or Qt's: not the game's
+    g_gameDevice = dev;
+  }
   ++g_stats.frames;
   targetread::present(); // copies issued in earlier frames; before the frame number changes
   ++g_d3dFrame;
+  // A device created after the game's (Qt's, in Black Mesa) took the back
+  // buffer over: the game device's is the one.
+  if (kStockEngine && dev != g_backBufferDevice)
+    refreshBackBuffer(dev);
   const uint64_t t0 = nowUs();
   // The runtime presents into the game window; D3D9's own presentation there
   // only fights it (DXVK recreated its swapchain every frame, ~10% of the
@@ -1112,6 +1142,8 @@ HRESULT STDMETHODCALLTYPE present(IDirect3DDevice9 *dev, const RECT *src, const 
 }
 
 HRESULT STDMETHODCALLTYPE reset(IDirect3DDevice9 *dev, D3DPRESENT_PARAMETERS *pp) {
+  if (foreign(dev))
+    return g_reset(dev, pp);
   skycap::release(); // D3DPOOL_DEFAULT targets must go before Reset
   targetread::release();
   remix::onCreateDevice(nullptr, pp);
@@ -1136,6 +1168,8 @@ void trackBuffer(const void *buffer, UINT length, DWORD usage, bool is32, D3DPOO
 
 HRESULT STDMETHODCALLTYPE createVertexBuffer(IDirect3DDevice9 *dev, UINT length, DWORD usage, DWORD fvf, D3DPOOL pool,
                                              IDirect3DVertexBuffer9 **out, HANDLE *shared) {
+  if (foreign(dev))
+    return g_createVertexBuffer(dev, length, usage, fvf, pool, out, shared);
   const HRESULT hr = g_createVertexBuffer(dev, length, usage, fvf, pool, out, shared);
   if (SUCCEEDED(hr) && out && *out) {
     if (!g_vbLock) {
@@ -1151,6 +1185,8 @@ HRESULT STDMETHODCALLTYPE createVertexBuffer(IDirect3DDevice9 *dev, UINT length,
 
 HRESULT STDMETHODCALLTYPE createIndexBuffer(IDirect3DDevice9 *dev, UINT length, DWORD usage, D3DFORMAT format,
                                             D3DPOOL pool, IDirect3DIndexBuffer9 **out, HANDLE *shared) {
+  if (foreign(dev))
+    return g_createIndexBuffer(dev, length, usage, format, pool, out, shared);
   const HRESULT hr = g_createIndexBuffer(dev, length, usage, format, pool, out, shared);
   if (SUCCEEDED(hr) && out && *out) {
     if (!g_ibLock) {
@@ -1166,19 +1202,21 @@ HRESULT STDMETHODCALLTYPE createIndexBuffer(IDirect3DDevice9 *dev, UINT length, 
 
 HRESULT STDMETHODCALLTYPE createTexture(IDirect3DDevice9 *dev, UINT width, UINT height, UINT levels, DWORD usage,
                                         D3DFORMAT format, D3DPOOL pool, IDirect3DTexture9 **out, HANDLE *shared) {
+  if (foreign(dev))
+    return g_createTexture(dev, width, height, levels, usage, format, pool, out, shared);
   const HRESULT hr = g_createTexture(dev, width, height, levels, usage, format, pool, out, shared);
   if (SUCCEEDED(hr) && out && *out && (usage & D3DUSAGE_RENDERTARGET))
     g_targetTextures[*out] = {width, height, format};
   // A new texture can reuse the address of one released without our Release hook
   // seeing it: whatever the runtime holds under that address is the old texture's.
-  if (kEz2 && SUCCEEDED(hr) && out && *out)
+  if (kStockEngine && SUCCEEDED(hr) && out && *out)
     remix::onTextureReleased(*out);
-  if (kEz2 && SUCCEEDED(hr) && out && *out && !(usage & D3DUSAGE_RENDERTARGET))
+  if (kStockEngine && SUCCEEDED(hr) && out && *out && !(usage & D3DUSAGE_RENDERTARGET))
     remix::initCpuTexture(*out, width, height, format);
   // D3D9Ex: a system-memory texture over the caller's memory (`shared` points
   // at its pixels). The engine writes there and copies it to a default-pool
   // texture (UpdateTexture) without ever locking it.
-  if (kEz2 && SUCCEEDED(hr) && out && *out && pool == D3DPOOL_SYSTEMMEM && shared && *shared)
+  if (kStockEngine && SUCCEEDED(hr) && out && *out && pool == D3DPOOL_SYSTEMMEM && shared && *shared)
     remix::onUserMemoryTexture(*out, width, height, format, static_cast<const uint8_t *>(*shared));
   if (SUCCEEDED(hr) && out && *out) {
     hookTexture(*out);
@@ -1188,7 +1226,9 @@ HRESULT STDMETHODCALLTYPE createTexture(IDirect3DDevice9 *dev, UINT width, UINT 
 
 HRESULT STDMETHODCALLTYPE updateSurface(IDirect3DDevice9 *dev, IDirect3DSurface9 *src, const RECT *srcRect,
                                         IDirect3DSurface9 *dst, const POINT *dstPoint) {
-  if (!kEz2) {
+  if (foreign(dev))
+    return g_updateSurface(dev, src, srcRect, dst, dstPoint);
+  if (!kStockEngine) {
     if (!srcRect && !dstPoint && src && dst) {
       IDirect3DTexture9 *from = levelZeroTexture(src), *to = levelZeroTexture(dst);
       if (from && to)
@@ -1256,8 +1296,10 @@ HRESULT STDMETHODCALLTYPE updateSurface(IDirect3DDevice9 *dev, IDirect3DSurface9
 }
 
 HRESULT STDMETHODCALLTYPE updateTexture(IDirect3DDevice9 *dev, IDirect3DBaseTexture9 *src, IDirect3DBaseTexture9 *dst) {
+  if (foreign(dev))
+    return g_updateTexture(dev, src, dst);
   remix::onTextureCopy(src, dst);
-  if (kEz2 && src && dst) {
+  if (kStockEngine && src && dst) {
     // A volume updated from its system-memory staging volume: the same contents.
     std::lock_guard<std::mutex> lock(g_volumeMutex);
     if (const auto from = g_volumeCopies.find(src); from != g_volumeCopies.end()) {
@@ -1271,6 +1313,8 @@ HRESULT STDMETHODCALLTYPE updateTexture(IDirect3DDevice9 *dev, IDirect3DBaseText
 }
 
 HRESULT STDMETHODCALLTYPE setRenderTarget(IDirect3DDevice9 *dev, DWORD index, IDirect3DSurface9 *surface) {
+  if (foreign(dev))
+    return g_setRenderTarget(dev, index, surface);
   ++g_stats.rtChanges;
   if (index == 0) {
     if (g_renderTargetTexture && surface != g_renderTarget0)
@@ -1290,6 +1334,8 @@ HRESULT STDMETHODCALLTYPE setRenderTarget(IDirect3DDevice9 *dev, DWORD index, ID
 }
 
 HRESULT STDMETHODCALLTYPE setRenderState(IDirect3DDevice9 *dev, D3DRENDERSTATETYPE state, DWORD value) {
+  if (foreign(dev))
+    return g_setRenderState(dev, state, value);
   if (unsigned(state) < 256)
     g_renderStates[state] = value;
   return g_setRenderState(dev, state, value);
@@ -1328,6 +1374,8 @@ float *transformSlot(D3DTRANSFORMSTATETYPE state) {
 }
 
 HRESULT STDMETHODCALLTYPE setTransform(IDirect3DDevice9 *dev, D3DTRANSFORMSTATETYPE state, const D3DMATRIX *m) {
+  if (foreign(dev))
+    return g_setTransform(dev, state, m);
   ++g_stats.setTransforms;
   if (m)
     if (float *to = transformSlot(state))
@@ -1337,6 +1385,8 @@ HRESULT STDMETHODCALLTYPE setTransform(IDirect3DDevice9 *dev, D3DTRANSFORMSTATET
 
 // D3D: the state becomes m x state.
 HRESULT STDMETHODCALLTYPE multiplyTransform(IDirect3DDevice9 *dev, D3DTRANSFORMSTATETYPE state, const D3DMATRIX *m) {
+  if (foreign(dev))
+    return g_multiplyTransform(dev, state, m);
   ++g_stats.setTransforms;
   if (m)
     if (float *to = transformSlot(state)) {
@@ -1348,6 +1398,8 @@ HRESULT STDMETHODCALLTYPE multiplyTransform(IDirect3DDevice9 *dev, D3DTRANSFORMS
 }
 
 HRESULT STDMETHODCALLTYPE setFVF(IDirect3DDevice9 *dev, DWORD fvf) {
+  if (foreign(dev))
+    return g_setFVF(dev, fvf);
   ++g_stats.setFVFs;
   ff::g_fvf = fvf;
   ff::g_fvfLayout = true;
@@ -1356,6 +1408,8 @@ HRESULT STDMETHODCALLTYPE setFVF(IDirect3DDevice9 *dev, DWORD fvf) {
 
 HRESULT STDMETHODCALLTYPE setTextureStageState(IDirect3DDevice9 *dev, DWORD stage, D3DTEXTURESTAGESTATETYPE type,
                                                DWORD value) {
+  if (foreign(dev))
+    return g_setTextureStageState(dev, stage, type, value);
   ++g_stats.stageStates;
   if (stage < 8 && unsigned(type) < 33)
     ff::g_stages[stage][type] = value;
@@ -1363,12 +1417,16 @@ HRESULT STDMETHODCALLTYPE setTextureStageState(IDirect3DDevice9 *dev, DWORD stag
 }
 
 HRESULT STDMETHODCALLTYPE setMaterial(IDirect3DDevice9 *dev, const D3DMATERIAL9 *material) {
+  if (foreign(dev))
+    return g_setMaterial(dev, material);
   if (material)
     ff::g_material = *material;
   return g_setMaterial(dev, material);
 }
 
 HRESULT STDMETHODCALLTYPE setLight(IDirect3DDevice9 *dev, DWORD index, const D3DLIGHT9 *light) {
+  if (foreign(dev))
+    return g_setLight(dev, index, light);
   ++g_stats.setLights;
   if (light && index < 32)
     ff::g_lights[index] = *light;
@@ -1376,14 +1434,18 @@ HRESULT STDMETHODCALLTYPE setLight(IDirect3DDevice9 *dev, DWORD index, const D3D
 }
 
 HRESULT STDMETHODCALLTYPE lightEnable(IDirect3DDevice9 *dev, DWORD index, BOOL enable) {
+  if (foreign(dev))
+    return g_lightEnable(dev, index, enable);
   if (index < 32)
     ff::g_lightsEnabled = (ff::g_lightsEnabled & ~(1u << index)) | (enable ? 1u << index : 0u);
   return g_lightEnable(dev, index, enable);
 }
 
 HRESULT STDMETHODCALLTYPE setTexture(IDirect3DDevice9 *dev, DWORD stage, IDirect3DBaseTexture9 *texture) {
+  if (foreign(dev))
+    return g_setTexture(dev, stage, texture);
   ++g_stats.textureBinds;
-  if (kEz2 && texture && texture->GetType() == D3DRTYPE_TEXTURE)
+  if (kStockEngine && texture && texture->GetType() == D3DRTYPE_TEXTURE)
     hookTexture(static_cast<IDirect3DTexture9 *>(texture));
   if (stage == 0)
     g_texture0 = texture;
@@ -1399,6 +1461,8 @@ HRESULT STDMETHODCALLTYPE setTexture(IDirect3DDevice9 *dev, DWORD stage, IDirect
 }
 
 HRESULT STDMETHODCALLTYPE setVertexDeclaration(IDirect3DDevice9 *dev, IDirect3DVertexDeclaration9 *decl) {
+  if (foreign(dev))
+    return g_setVertexDeclaration(dev, decl);
   g_decl = decl;
   ff::g_fvfLayout = false;
   if (decl && !g_declElements.count(decl)) {
@@ -1412,6 +1476,8 @@ HRESULT STDMETHODCALLTYPE setVertexDeclaration(IDirect3DDevice9 *dev, IDirect3DV
 
 HRESULT STDMETHODCALLTYPE createVertexShader(IDirect3DDevice9 *dev, const DWORD *function,
                                              IDirect3DVertexShader9 **out) {
+  if (foreign(dev))
+    return g_createVertexShader(dev, function, out);
   const HRESULT hr = g_createVertexShader(dev, function, out);
   if (SUCCEEDED(hr) && out && *out && function) {
     static_assert(sizeof(DWORD) == sizeof(uint32_t));
@@ -1427,6 +1493,8 @@ HRESULT STDMETHODCALLTYPE createVertexShader(IDirect3DDevice9 *dev, const DWORD 
 }
 
 HRESULT STDMETHODCALLTYPE createPixelShader(IDirect3DDevice9 *dev, const DWORD *function, IDirect3DPixelShader9 **out) {
+  if (foreign(dev))
+    return g_createPixelShader(dev, function, out);
   const HRESULT hr = g_createPixelShader(dev, function, out);
   if (SUCCEEDED(hr) && out && *out)
     keepShaderCode(*out, function, "ps");
@@ -1434,11 +1502,15 @@ HRESULT STDMETHODCALLTYPE createPixelShader(IDirect3DDevice9 *dev, const DWORD *
 }
 
 HRESULT STDMETHODCALLTYPE setPixelShader(IDirect3DDevice9 *dev, IDirect3DPixelShader9 *shader) {
+  if (foreign(dev))
+    return g_setPixelShader(dev, shader);
   g_pixelShader = shader;
   return g_setPixelShader(dev, shader);
 }
 
 HRESULT STDMETHODCALLTYPE setVertexShader(IDirect3DDevice9 *dev, IDirect3DVertexShader9 *shader) {
+  if (foreign(dev))
+    return g_setVertexShader(dev, shader);
   if (const uint32_t created = g_vertexProgramsCreated.load(std::memory_order_relaxed);
       shader != g_vertexShader || created != g_vertexProgramSeen) {
     g_vertexProgramSeen = created;
@@ -1451,6 +1523,8 @@ HRESULT STDMETHODCALLTYPE setVertexShader(IDirect3DDevice9 *dev, IDirect3DVertex
 }
 
 HRESULT STDMETHODCALLTYPE setVertexShaderConstantF(IDirect3DDevice9 *dev, UINT start, const float *data, UINT count) {
+  if (foreign(dev))
+    return g_setVertexShaderConstantF(dev, start, data, count);
   ++g_stats.vsConstCalls;
   if (data && start < 256)
     std::memcpy(&g_vsConstants[start * 4], data, std::min(count, 256 - start) * 16);
@@ -1458,18 +1532,24 @@ HRESULT STDMETHODCALLTYPE setVertexShaderConstantF(IDirect3DDevice9 *dev, UINT s
 }
 
 HRESULT STDMETHODCALLTYPE setPixelShaderConstantF(IDirect3DDevice9 *dev, UINT start, const float *data, UINT count) {
+  if (foreign(dev))
+    return g_setPixelShaderConstantF(dev, start, data, count);
   if (data && start < 224)
     std::memcpy(&g_psConstants[start * 4], data, std::min(count, 224 - start) * 16);
   return g_setPixelShaderConstantF(dev, start, data, count);
 }
 
 HRESULT STDMETHODCALLTYPE setPixelShaderConstantI(IDirect3DDevice9 *dev, UINT start, const int *data, UINT count) {
+  if (foreign(dev))
+    return g_setPixelShaderConstantI(dev, start, data, count);
   if (data && start < 16)
     std::memcpy(&g_psConstantsI[start * 4], data, std::min(count, 16 - start) * 16);
   return g_setPixelShaderConstantI(dev, start, data, count);
 }
 
 HRESULT STDMETHODCALLTYPE setVertexShaderConstantI(IDirect3DDevice9 *dev, UINT start, const int *data, UINT count) {
+  if (foreign(dev))
+    return g_setVertexShaderConstantI(dev, start, data, count);
   if (data && start < 16)
     std::memcpy(&g_vsConstantsI[start * 4], data, std::min(count, 16 - start) * 16);
   return g_setVertexShaderConstantI(dev, start, data, count);
@@ -1481,28 +1561,38 @@ void setBools(uint32_t &bools, UINT start, const BOOL *data, UINT count) {
 }
 
 HRESULT STDMETHODCALLTYPE setPixelShaderConstantB(IDirect3DDevice9 *dev, UINT start, const BOOL *data, UINT count) {
+  if (foreign(dev))
+    return g_setPixelShaderConstantB(dev, start, data, count);
   setBools(g_psBools, start, data, count);
   return g_setPixelShaderConstantB(dev, start, data, count);
 }
 
 HRESULT STDMETHODCALLTYPE setVertexShaderConstantB(IDirect3DDevice9 *dev, UINT start, const BOOL *data, UINT count) {
+  if (foreign(dev))
+    return g_setVertexShaderConstantB(dev, start, data, count);
   setBools(g_vsBools, start, data, count);
   return g_setVertexShaderConstantB(dev, start, data, count);
 }
 
 HRESULT STDMETHODCALLTYPE setSamplerState(IDirect3DDevice9 *dev, DWORD sampler, D3DSAMPLERSTATETYPE type, DWORD value) {
+  if (foreign(dev))
+    return g_setSamplerState(dev, sampler, type, value);
   if (sampler < 16 && unsigned(type) < 16)
     g_samplerStates[sampler][type] = value;
   return g_setSamplerState(dev, sampler, type, value);
 }
 
 HRESULT STDMETHODCALLTYPE setViewport(IDirect3DDevice9 *dev, const D3DVIEWPORT9 *viewport) {
+  if (foreign(dev))
+    return g_setViewport(dev, viewport);
   if (viewport)
     g_viewport = *viewport;
   return g_setViewport(dev, viewport);
 }
 
 HRESULT STDMETHODCALLTYPE setScissorRect(IDirect3DDevice9 *dev, const RECT *rect) {
+  if (foreign(dev))
+    return g_setScissorRect(dev, rect);
   if (rect)
     g_scissor = *rect;
   return g_setScissorRect(dev, rect);
@@ -1523,6 +1613,8 @@ bool copySurface(IDirect3DSurface9 *surface, const void *&texture) {
 
 HRESULT STDMETHODCALLTYPE stretchRect(IDirect3DDevice9 *dev, IDirect3DSurface9 *src, const RECT *srcRect,
                                       IDirect3DSurface9 *dst, const RECT *dstRect, D3DTEXTUREFILTERTYPE filter) {
+  if (foreign(dev))
+    return g_stretchRect(dev, src, srcRect, dst, dstRect, filter);
   const void *from = nullptr, *to = nullptr;
   if (copySurface(src, from) && copySurface(dst, to) && from != to)
     hostpass::recordCopy(from, srcRect, to, dstRect, filter != D3DTEXF_POINT && filter != D3DTEXF_NONE);
@@ -1531,6 +1623,8 @@ HRESULT STDMETHODCALLTYPE stretchRect(IDirect3DDevice9 *dev, IDirect3DSurface9 *
 
 HRESULT STDMETHODCALLTYPE setStreamSource(IDirect3DDevice9 *dev, UINT stream, IDirect3DVertexBuffer9 *vb, UINT offset,
                                           UINT stride) {
+  if (foreign(dev))
+    return g_setStreamSource(dev, stream, vb, offset, stride);
   ++g_stats.streamSets;
   if (stream < 4)
     g_streams[stream] = {vb, offset, stride};
@@ -1538,11 +1632,15 @@ HRESULT STDMETHODCALLTYPE setStreamSource(IDirect3DDevice9 *dev, UINT stream, ID
 }
 
 HRESULT STDMETHODCALLTYPE setIndices(IDirect3DDevice9 *dev, IDirect3DIndexBuffer9 *ib) {
+  if (foreign(dev))
+    return g_setIndices(dev, ib);
   g_indices = ib;
   return g_setIndices(dev, ib);
 }
 
 HRESULT STDMETHODCALLTYPE drawPrimitive(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE type, UINT start, UINT count) {
+  if (foreign(dev))
+    return g_drawPrimitive(dev, type, start, count);
   ++g_stats.dp;
   return g_drawPrimitive(dev, type, start, count);
 }
@@ -1638,7 +1736,7 @@ void drawOccluders(IDirect3DDevice9 *dev) {
 HRESULT STDMETHODCALLTYPE queryGetData(IDirect3DQuery9 *query, void *data, DWORD size, DWORD flags) {
   const HRESULT hr = g_queryGetData(query, data, size, flags);
   if (hr == S_OK && data && size >= 4 && query->GetType() == D3DQUERYTYPE_OCCLUSION) {
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
     // Raytracing renders occluded entities; prevent the engine from culling
     // characters or enemies when raster occluder depth tests return 0 pixels.
     *static_cast<DWORD *>(data) = std::max<DWORD>(*static_cast<DWORD *>(data), 1);
@@ -1679,6 +1777,8 @@ HRESULT STDMETHODCALLTYPE queryIssue(IDirect3DQuery9 *query, DWORD flags) {
 // this target draws them again, with that view's matrices.
 HRESULT STDMETHODCALLTYPE clear(IDirect3DDevice9 *dev, DWORD count, const D3DRECT *rects, DWORD flags, D3DCOLOR color,
                                 float z, DWORD stencil) {
+  if (foreign(dev))
+    return g_clear(dev, count, rects, flags, color, z, stencil);
   if ((flags & D3DCLEAR_TARGET) && count == 0 && g_renderTargetTexture)
     hostpass::recordClear(g_renderTargetTexture, color);
   if (flags & D3DCLEAR_ZBUFFER) {
@@ -1692,6 +1792,8 @@ HRESULT STDMETHODCALLTYPE clear(IDirect3DDevice9 *dev, DWORD count, const D3DREC
 }
 
 HRESULT STDMETHODCALLTYPE createQuery(IDirect3DDevice9 *dev, D3DQUERYTYPE type, IDirect3DQuery9 **out) {
+  if (foreign(dev))
+    return g_createQuery(dev, type, out);
   const HRESULT hr = g_createQuery(dev, type, out);
   if (SUCCEEDED(hr) && out && *out && type == D3DQUERYTYPE_OCCLUSION && !g_queryIssue) {
     hookSlot(vtableOf(*out), kQueryIssue, &queryIssue, g_queryIssue);
@@ -1709,7 +1811,7 @@ bool captureDraw(D3DPRIMITIVETYPE type, INT baseVertex, UINT minIndex, UINT numV
   const bool fixedFunction = game::kFixedFunction && !g_vertexShader;
   const D3DVERTEXELEMENT9 *elements = nullptr;
   const void *declaration = g_decl;
-  if ((fixedFunction || kEz2) && ff::g_fvfLayout) {
+  if ((fixedFunction || kStockEngine) && ff::g_fvfLayout) {
     const auto &e = ff::fvfElements(ff::g_fvf);
     elements = e.data();
     declaration = &e;
@@ -2016,7 +2118,7 @@ void capture(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE type, INT baseVertex, UINT 
   // them, whatever the exposure, or each capture after the first is brighter.
   float savedLightScale[4];
   std::memcpy(savedLightScale, &g_psConstants[kLightScaleRegister * 4], sizeof(savedLightScale));
-  if (kEz2) {
+  if (kStockEngine) {
     const float neutral[4] = {1, savedLightScale[1], savedLightScale[2], 1};
     g_setPixelShaderConstantF(dev, kLightScaleRegister, neutral, 1);
   }
@@ -2056,7 +2158,7 @@ void capture(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE type, INT baseVertex, UINT 
   g.captureFrame = g_d3dFrame;
   g.captured = true;
   g_setVertexShaderConstantF(dev, 4, saved, 8);
-  if (kEz2)
+  if (kStockEngine)
     g_setPixelShaderConstantF(dev, kLightScaleRegister, savedLightScale, 1);
   g_setRenderTarget(dev, 0, oldTarget);
   dev->SetDepthStencilSurface(oldDepth);
@@ -2265,6 +2367,8 @@ void wantTargetContents(const void *texture) {
 
 HRESULT STDMETHODCALLTYPE drawIndexedPrimitive(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE type, INT baseVertex,
                                                UINT minIndex, UINT numVertices, UINT startIndex, UINT primCount) {
+  if (foreign(dev))
+    return g_drawIndexedPrimitive(dev, type, baseVertex, minIndex, numVertices, startIndex, primCount);
   ++g_stats.dip;
   g_stats.dipPrims += primCount;
   if (remix::enabled()) {
@@ -2314,6 +2418,8 @@ HRESULT STDMETHODCALLTYPE drawIndexedPrimitive(IDirect3DDevice9 *dev, D3DPRIMITI
 
 HRESULT STDMETHODCALLTYPE drawPrimitiveUP(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE type, UINT count, const void *data,
                                           UINT stride) {
+  if (foreign(dev))
+    return g_drawPrimitiveUP(dev, type, count, data, stride);
   ++g_stats.dpUP;
   return g_drawPrimitiveUP(dev, type, count, data, stride);
 }
@@ -2321,6 +2427,8 @@ HRESULT STDMETHODCALLTYPE drawPrimitiveUP(IDirect3DDevice9 *dev, D3DPRIMITIVETYP
 HRESULT STDMETHODCALLTYPE drawIndexedPrimitiveUP(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE type, UINT minIndex,
                                                  UINT numVertices, UINT primCount, const void *indices,
                                                  D3DFORMAT format, const void *vertices, UINT stride) {
+  if (foreign(dev))
+    return g_drawIndexedPrimitiveUP(dev, type, minIndex, numVertices, primCount, indices, format, vertices, stride);
   ++g_stats.dipUP;
   return g_drawIndexedPrimitiveUP(dev, type, minIndex, numVertices, primCount, indices, format, vertices, stride);
 }
@@ -2332,7 +2440,7 @@ void hookDevice(IDirect3DDevice9 *device) {
   hookSlot(vt, kReset, &reset, g_reset);
   hookSlot(vt, kPresent, &present, g_present);
   hookSlot(vt, kCreateTexture, &createTexture, g_createTexture);
-  if (kEz2)
+  if (kStockEngine)
     hookSlot(vt, kCreateVolumeTexture, &createVolumeTexture, g_createVolumeTexture);
   hookSlot(vt, kUpdateTexture, &updateTexture, g_updateTexture);
   hookSlot(vt, kUpdateSurface, &updateSurface, g_updateSurface);
@@ -2364,12 +2472,12 @@ void hookDevice(IDirect3DDevice9 *device) {
   hookSlot(vt, kSetStreamSource, &setStreamSource, g_setStreamSource);
   hookSlot(vt, kSetIndices, &setIndices, g_setIndices);
   hookSlot(vt, kCreateQuery, &createQuery, g_createQuery);
-  if (kEz2)
+  if (kStockEngine)
     hookSlot(vt, kSetFVF, &setFVF, g_setFVF);
   if (game::kFixedFunction) {
     hookSlot(vt, kSetTransform, &setTransform, g_setTransform);
     hookSlot(vt, kMultiplyTransform, &multiplyTransform, g_multiplyTransform);
-    if (!kEz2)
+    if (!kStockEngine)
       hookSlot(vt, kSetFVF, &setFVF, g_setFVF);
     hookSlot(vt, kSetTextureStageState, &setTextureStageState, g_setTextureStageState);
     hookSlot(vt, kSetMaterial, &setMaterial, g_setMaterial);
@@ -2407,7 +2515,7 @@ HRESULT STDMETHODCALLTYPE createDevice(IDirect3D9 *d3d, UINT adapter, D3DDEVTYPE
   return hr;
 }
 
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
 HRESULT STDMETHODCALLTYPE createDeviceEx(IDirect3D9Ex *d3d, UINT adapter, D3DDEVTYPE type, HWND focus, DWORD flags,
                                          D3DPRESENT_PARAMETERS *pp, D3DDISPLAYMODEEX *fullscreenMode,
                                          IDirect3DDevice9Ex **out) {
@@ -2450,7 +2558,7 @@ IDirect3D9 *WINAPI direct3DCreate9(UINT sdk) {
   return d3d;
 }
 
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
 HRESULT WINAPI direct3DCreate9Ex(UINT sdk, IDirect3D9Ex **out) {
   proxy::diag::stage("direct3DCreate9Ex(sdk %u) called", sdk);
   HRESULT hr = g_createEx(sdk, out);
@@ -2511,7 +2619,7 @@ void *patchModuleImport(HMODULE module, const char *dll, const char *name, void 
 bool install(HMODULE module) {
   g_create = reinterpret_cast<CreateFn>(
       patchImport(module, "d3d9.dll", "Direct3DCreate9", reinterpret_cast<void *>(&direct3DCreate9)));
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   // The shader API asks for Direct3DCreate9Ex by name at run time.
   g_getProcAddress = reinterpret_cast<GetProcAddressFn>(
       patchImport(module, "KERNEL32.dll", "GetProcAddress", reinterpret_cast<void *>(&proxyGetProcAddress)));
@@ -2533,6 +2641,65 @@ bool targetTexture(const void *texture, uint32_t &width, uint32_t &height, uint3
   height = it->second.height;
   format = it->second.format;
   return true;
+}
+bool readTargetForUi(const void *texture) {
+  static std::unordered_map<const void *, uint64_t> read; // the frame each was read in
+  static IDirect3DSurface9 *system = nullptr;
+  static D3DSURFACE_DESC systemDesc = {};
+  if (!kStockEngine || !texture || !g_backBufferDevice)
+    return false;
+  if (auto it = read.find(texture); it != read.end() && it->second == g_d3dFrame)
+    return true;
+  auto *base = const_cast<IDirect3DBaseTexture9 *>(static_cast<const IDirect3DBaseTexture9 *>(texture));
+  if (base->GetType() != D3DRTYPE_TEXTURE)
+    return false;
+  IDirect3DSurface9 *surface = nullptr;
+  if (FAILED(static_cast<IDirect3DTexture9 *>(base)->GetSurfaceLevel(0, &surface)) || !surface)
+    return false;
+  D3DSURFACE_DESC desc = {};
+  surface->GetDesc(&desc);
+  bool ok = (desc.Usage & D3DUSAGE_RENDERTARGET) && desc.MultiSampleType == D3DMULTISAMPLE_NONE &&
+            (desc.Format == D3DFMT_A8R8G8B8 || desc.Format == D3DFMT_X8R8G8B8) && desc.Width <= 4096 &&
+            desc.Height <= 4096;
+  if (ok && (!system || systemDesc.Width != desc.Width || systemDesc.Height != desc.Height ||
+             systemDesc.Format != desc.Format)) {
+    if (system)
+      system->Release();
+    system = nullptr;
+    ok = SUCCEEDED(g_backBufferDevice->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format,
+                                                                   D3DPOOL_SYSTEMMEM, &system, nullptr));
+    systemDesc = desc;
+    if (!ok)
+      system = nullptr;
+  }
+  // A shared texture (written by another API) reads back empty here: a GPU
+  // copy into a plain render target first.
+  static IDirect3DSurface9 *plain = nullptr;
+  static D3DSURFACE_DESC plainDesc = {};
+  if (ok && (!plain || plainDesc.Width != desc.Width || plainDesc.Height != desc.Height ||
+             plainDesc.Format != desc.Format)) {
+    if (plain)
+      plain->Release();
+    plain = nullptr;
+    plainDesc = desc;
+    if (FAILED(g_backBufferDevice->CreateRenderTarget(desc.Width, desc.Height, desc.Format, D3DMULTISAMPLE_NONE, 0,
+                                                      FALSE, &plain, nullptr)))
+      plain = nullptr;
+  }
+  if (ok && plain && SUCCEEDED(g_stretchRect(g_backBufferDevice, surface, nullptr, plain, nullptr, D3DTEXF_NONE)))
+    ok = SUCCEEDED(g_backBufferDevice->GetRenderTargetData(plain, system));
+  else if (ok)
+    ok = SUCCEEDED(g_backBufferDevice->GetRenderTargetData(surface, system));
+  surface->Release();
+  D3DLOCKED_RECT locked = {};
+  if (ok && SUCCEEDED(system->LockRect(&locked, nullptr, D3DLOCK_READONLY))) {
+    remix::onUiTargetPixels(texture, desc.Width, desc.Height, desc.Format, static_cast<const uint8_t *>(locked.pBits),
+                            uint32_t(locked.Pitch));
+    system->UnlockRect();
+    read[texture] = g_d3dFrame;
+    return true;
+  }
+  return false;
 }
 std::shared_ptr<const std::vector<uint32_t>> shaderCode(const void *shader) {
   std::lock_guard<std::mutex> lock(g_vertexProgramLock);

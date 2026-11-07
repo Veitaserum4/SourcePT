@@ -7,12 +7,14 @@
 // The game the proxy is built for, chosen when the build is configured
 // (meson option `game`): PROXY_GAME_GMOD, Garry's Mod x64 (bin/win64),
 // PROXY_GAME_L4D2, Left 4 Dead 2 (x86), PROXY_GAME_HL2RTX, Half-Life 2 RTX
-// (x86, a Mapbase mod on NVIDIA's Portal RTX engine build), or PROXY_GAME_EZ2,
-// Entropy : Zero 2 (x86, a Mapbase mod on Source 2013). What differs
+// (x86, a Mapbase mod on NVIDIA's Portal RTX engine build), PROXY_GAME_EZ2,
+// Entropy : Zero 2 (x86, a Mapbase mod on Source 2013), or PROXY_GAME_BMS,
+// Black Mesa (x86, Crowbar Collective's engine branch). The last two are
+// stock engines, not built for RTX Remix (PROXY_STOCK_ENGINE). What differs
 // between them is named here; the rest of the proxy reads these instead of
 // literals.
-#if defined(PROXY_GAME_GMOD) + defined(PROXY_GAME_L4D2) + defined(PROXY_GAME_HL2RTX) + defined(PROXY_GAME_EZ2) != 1
-#error "define one of PROXY_GAME_GMOD, PROXY_GAME_L4D2, PROXY_GAME_HL2RTX, PROXY_GAME_EZ2 (meson option game)"
+#if defined(PROXY_GAME_GMOD) + defined(PROXY_GAME_L4D2) + defined(PROXY_GAME_HL2RTX) + defined(PROXY_GAME_EZ2) +             defined(PROXY_GAME_BMS) !=                                                                                         1
+#error "define one of PROXY_GAME_GMOD, PROXY_GAME_L4D2, PROXY_GAME_HL2RTX, PROXY_GAME_EZ2, PROXY_GAME_BMS (meson option game)"
 #endif
 #if defined(PROXY_GAME_GMOD) && !defined(_WIN64)
 #error "the Garry's Mod proxy is a 64-bit DLL"
@@ -25,6 +27,9 @@
 #endif
 #if defined(PROXY_GAME_EZ2) && defined(_WIN64)
 #error "the Entropy : Zero 2 proxy is a 32-bit DLL"
+#endif
+#if defined(PROXY_GAME_BMS) && defined(_WIN64)
+#error "the Black Mesa proxy is a 32-bit DLL"
 #endif
 
 // The engine's C++ methods (MSVC ABI), as the proxy hooks and calls them: a
@@ -226,6 +231,71 @@ constexpr wchar_t kRuntimePath[] = L"\\remix_bridge.dll";
 constexpr char kRuntimeLabel[] = "remix_bridge.dll";
 constexpr wchar_t kRuntimeModule[] = L"remix_bridge.dll";
 constexpr char kRuntimeName[] = "remix_bridge.dll";
+
+// The engine side (ez2_engine.cpp): interfaces and their slots.
+constexpr char kMaterialSystemInterface[] = "VMaterialSystem080";
+constexpr char kEngineClientInterface[] = "VEngineClient014";
+// IVEngineClient GetLevelName, ClientCmd_Unrestricted.
+constexpr unsigned kSlotGetLevelName = 51, kSlotClientCmdUnrestricted = 106;
+// IMaterialSystem GetRenderContext; IMatRenderContext SetPIXMarker.
+constexpr unsigned kSlotGetRenderContext = 98, kSlotContextSetPIXMarker = 142;
+// ICvar FindVar; IConVar SetValue(int) (kConVarSetInt false: the cvars are set
+// by command only).
+constexpr unsigned kSlotFindVar = 14, kSlotConVarSetInt = 2;
+constexpr bool kConVarSetInt = true;
+
+#elif defined(PROXY_GAME_BMS)
+
+constexpr bool kGMod = false;
+
+// Black Mesa (Steam app 362890, bms.exe): Crowbar Collective's branch of the
+// engine, newer than SDK 2013 (VMaterialSystem081, VEngineClient015), with
+// interfaces that grew: every slot below was found by aligning its vtables
+// (RTTI) with Entropy : Zero 2's and read in the code.
+constexpr char kShaderApiInterface[] = "ShaderApi030";
+constexpr char kHardwareConfigInterface[] = "MaterialSystemHardwareConfig012";
+constexpr bool kHookVBAllocTracker = false;
+constexpr bool kFixedFunction = false;
+
+// IShaderAPIDX8 (ShaderApi030, CShaderAPIDx8 at +0x220): 372 slots, SDK 2013's
+// order with additions. SetLight 158 (the light index checked against the
+// hardware's count, then copied), Bind 145 (m_pMaterial at 0x3af8,
+// FlushBufferedPrimitives 146), SetPIXMarker 283 (a stub, ret 8; with
+// GetFogDistances 280 and the stubs around it, SDK 2013's shifted by 68).
+constexpr unsigned kSlotSetLight = 158;
+constexpr bool kSetLightsArray = false;
+constexpr unsigned kSlotBind = 145;
+constexpr unsigned kSlotSetPIXMarker = 283;
+constexpr unsigned kSlotGetMatrix = 12;
+constexpr unsigned kSlotGetCurrentNumBones = 34;
+constexpr unsigned kSlotGetSceneFogMode = 4, kSlotGetSceneFogColor = 5, kSlotGetFogDistances = 280;
+constexpr bool kSceneFogSlots = true;
+
+constexpr unsigned kRegFlexScale = 3;
+// The stock shader names (stdshader_dx9).
+constexpr char kShaderPrefix[] = "";
+
+// ISurface SetCursorAlwaysVisible(bool): VGUI_Surface030 slot 58 (stores the
+// flag at +0x270, which IsCursorVisible, 59, reads).
+constexpr char kSurfaceInterface[] = "VGUI_Surface030";
+constexpr unsigned kSlotSetCursorAlwaysVisible = 58;
+
+// The runtime: the x86 -> x64 bridge client beside the proxy (bin)
+constexpr wchar_t kRuntimePath[] = L"\\remix_bridge.dll";
+constexpr char kRuntimeLabel[] = "remix_bridge.dll";
+constexpr wchar_t kRuntimeModule[] = L"remix_bridge.dll";
+constexpr char kRuntimeName[] = "remix_bridge.dll";
+
+// The engine side (ez2_engine.cpp).
+constexpr char kMaterialSystemInterface[] = "VMaterialSystem081";
+constexpr char kEngineClientInterface[] = "VEngineClient015";
+constexpr unsigned kSlotGetLevelName = 53, kSlotClientCmdUnrestricted = 109;
+constexpr unsigned kSlotGetRenderContext = 103, kSlotContextSetPIXMarker = 181;
+// ICvar FindCommandBase (13): FindVar (17) found nothing, even sv_cheats; a
+// ConVar is its own ConCommandBase. IConVar has one SetValue overload more
+// than SDK 2013's: the cvars are set by command.
+constexpr unsigned kSlotFindVar = 13, kSlotConVarSetInt = 0;
+constexpr bool kConVarSetInt = false;
 
 #endif
 

@@ -24,6 +24,12 @@ bool install();
 // the engine's light state for the renderer.
 void sample();
 
+// Black Mesa: its flashlight, a deferred light (GBLight), from its draw's
+// constants: position and range, direction and cosine of the outer cone,
+// colour and intensity.
+void setDeferredFlashlight(const float position[4], const float direction[4], const float color[4],
+                           const void *cookie);
+
 // A light in the engine's LightDesc_t terms, as bsp::Light (type 1 point,
 // 3 spot; color in Source's linear intensity units). hash: a stable identity
 // (the definition changes under it).
@@ -38,6 +44,8 @@ struct Light {
   // field of view in degrees.
   float up[3] = {}, fov = 0;
   std::string cookie;
+  // ... or its D3D texture (Black Mesa's flashlight), when it has no name.
+  const void *cookieTexture = nullptr;
   int32_t cookieFrame = 0;
 };
 struct Snapshot {

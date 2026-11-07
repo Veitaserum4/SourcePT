@@ -98,20 +98,26 @@ void appendSwitch(const char *name) {
     log("proxy: no tier0 command line; pass %s yourself", name);
     return;
   }
+  // ICommandLine AppendParm and FindParm (Black Mesa's has a method more before them).
+#ifdef PROXY_GAME_BMS
+  constexpr int kAppendParm = 6, kFindParm = 11;
+#else
+  constexpr int kAppendParm = 5, kFindParm = 10;
+#endif
   void **vt = *static_cast<void ***>(commandLine);
   const auto [begin, end] = codeRangeOf(vt[0]);
-  for (int slot : {5, 10})
+  for (int slot : {kAppendParm, kFindParm})
     if (reinterpret_cast<uintptr_t>(vt[slot]) < begin || reinterpret_cast<uintptr_t>(vt[slot]) >= end) {
       log("proxy: tier0 command line vtable not as expected; pass %s yourself", name);
       return;
     }
   using FindParmFn = int(PROXY_THISCALL *)(void *, const char *);
   using AppendParmFn = void(PROXY_THISCALL *)(void *, const char *, const char *);
-  const auto findParm = reinterpret_cast<FindParmFn>(vt[10]);
+  const auto findParm = reinterpret_cast<FindParmFn>(vt[kFindParm]);
   if (findParm(commandLine, name)) {
     log("proxy: %s given", name);
   } else {
-    reinterpret_cast<AppendParmFn>(vt[5])(commandLine, name, nullptr);
+    reinterpret_cast<AppendParmFn>(vt[kAppendParm])(commandLine, name, nullptr);
     log("proxy: %s appended to the command line (%s)", name,
         findParm(commandLine, name) ? "found there now" : "NOT found afterwards: pass it yourself");
   }
@@ -193,7 +199,7 @@ bool PROXY_THISCALL deviceMgrConnect(proxy::Wrapper *self, CreateInterfaceFn fac
   return ok;
 }
 
-#ifdef PROXY_GAME_EZ2
+#if defined(PROXY_STOCK_ENGINE)
 // IShaderDeviceMgr slot 1: void Disconnect() (IAppSystem).
 void PROXY_THISCALL deviceMgrDisconnect(proxy::Wrapper *self) {
   using Fn = void(PROXY_THISCALL *)(void *);
@@ -225,6 +231,14 @@ void PROXY_THISCALL deviceMgrShutdown(proxy::Wrapper *self) {
   proxy::remix::shutdown();
 }
 
+// IAppSystem's methods before the interfaces' own: 5 (Black Mesa's 8). IShaderDeviceMgr
+// SetMode and IShaderUtil RestoreShaderObjects are the eighth of theirs.
+#ifdef PROXY_GAME_BMS
+constexpr unsigned kSlotSetMode = 15, kSlotRestoreShaderObjects = 15;
+#else
+constexpr unsigned kSlotSetMode = 12, kSlotRestoreShaderObjects = 12;
+#endif
+
 // IShaderDeviceMgr slot 12 (5 + 7): CreateInterfaceFn SetMode(void *hWnd,
 // int nAdapter, const ShaderDeviceInfo_t &mode). The material system fetches
 // the shader API interfaces through the factory it returns.
@@ -236,7 +250,7 @@ void *setModeFactory(const char *name, int *rc) {
 CreateInterfaceFn PROXY_THISCALL deviceMgrSetMode(proxy::Wrapper *self, void *hwnd, int adapter, const void *mode) {
   using Fn = CreateInterfaceFn(PROXY_THISCALL *)(void *, void *, int, const void *);
   proxy::diag::stage("IShaderDeviceMgr::SetMode(hwnd %p, adapter %d): the engine creates its Direct3D device", hwnd, adapter);
-  CreateInterfaceFn factory = proxy::original<Fn>(self, 12)(self->real, hwnd, adapter, mode);
+  CreateInterfaceFn factory = proxy::original<Fn>(self, kSlotSetMode)(self->real, hwnd, adapter, mode);
   log("proxy: SetMode(hwnd=%p, adapter=%d) -> factory %p", hwnd, adapter, reinterpret_cast<void *>(factory));
   proxy::diag::stage("SetMode returned factory %p", reinterpret_cast<void *>(factory));
   if (!factory)
@@ -258,7 +272,7 @@ void PROXY_THISCALL shaderUtilRestoreShaderObjects(proxy::Wrapper *self, CreateI
   log("proxy: IShaderUtil::RestoreShaderObjects(factory %p, flags %d)", reinterpret_cast<void *>(factory), flags);
   if (factory && factory != restoreFactory)
     g_restoreFactory = factory;
-  proxy::original<Fn>(self, 12)(self->real, factory ? restoreFactory : nullptr, flags);
+  proxy::original<Fn>(self, kSlotRestoreShaderObjects)(self->real, factory ? restoreFactory : nullptr, flags);
 }
 
 // IShaderAPI (ShaderApi030) slot 127 (Half-Life 2 RTX 126): void
@@ -301,19 +315,21 @@ const KnownInterface kKnown[] = {
     {"ShaderDeviceMgr001",
      [](proxy::Kind *k) {
        proxy::setHook(k, 0, reinterpret_cast<void *>(&deviceMgrConnect));
-#ifdef PROXY_GAME_EZ2
+// Black Mesa's Disconnect takes arguments: not hooked (it only logs).
+#if defined(PROXY_GAME_EZ2)
        proxy::setHook(k, 1, reinterpret_cast<void *>(&deviceMgrDisconnect));
 #endif
        proxy::setHook(k, 2, reinterpret_cast<void *>(&deviceMgrQueryInterface));
-#ifdef PROXY_GAME_EZ2
+#if defined(PROXY_STOCK_ENGINE)
        proxy::setHook(k, 3, reinterpret_cast<void *>(&deviceMgrInit));
 #endif
        proxy::setHook(k, 4, reinterpret_cast<void *>(&deviceMgrShutdown));
-       proxy::setHook(k, 12, reinterpret_cast<void *>(&deviceMgrSetMode));
+       proxy::setHook(k, kSlotSetMode, reinterpret_cast<void *>(&deviceMgrSetMode));
      }},
     {proxy::game::kShaderApiInterface,
      [](proxy::Kind *k) {
-#ifndef PROXY_GAME_GMOD
+// Black Mesa's IShaderAPI (372 slots) has no name table.
+#if !defined(PROXY_GAME_GMOD) && !defined(PROXY_GAME_BMS)
        k->slotNames.assign(proxy::slots::kShaderApi, proxy::slots::kShaderApi + std::size(proxy::slots::kShaderApi));
 #endif
        proxy::setHook(k, proxy::game::kSlotSetLight, reinterpret_cast<void *>(&shaderApiSetLight));
@@ -332,7 +348,7 @@ const KnownInterface kKnown[] = {
      }},
     // Material system interface handed to the shader API.
     {"VShaderUtil001",
-     [](proxy::Kind *k) { proxy::setHook(k, 12, reinterpret_cast<void *>(&shaderUtilRestoreShaderObjects)); }},
+     [](proxy::Kind *k) { proxy::setHook(k, kSlotRestoreShaderObjects, reinterpret_cast<void *>(&shaderUtilRestoreShaderObjects)); }},
 };
 
 void *wrapInterface(const char *name, void *real) {
@@ -995,7 +1011,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     proxy::diag::stage("proxy loaded");
     preferCachedDxvkBuffers();
   }
-#ifdef PROXY_GAME_EZ2
+#if defined(PROXY_STOCK_ENGINE)
   else if (reason == DLL_PROCESS_DETACH) {
     proxy::diag::uninstall();
   }

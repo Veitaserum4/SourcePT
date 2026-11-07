@@ -124,9 +124,17 @@ constexpr size_t kMaterialCount = 0x32, kMaterialParams = 0x38, kMaterialName = 
 constexpr size_t kVarType = 0x24, kVarTexture = 0x39;
 #else
 // L4D2, Half-Life 2 RTX: as the code checked at install reads them (see above).
+#ifdef PROXY_GAME_BMS
+// Black Mesa: CMaterial and CMaterialVar have methods more (their vtables
+// aligned with Entropy : Zero 2's and the code below checked).
+constexpr unsigned kSlotGetName = 0, kSlotParamCount = 42, kSlotParams = 43, kSlotShaderName = 51;
+constexpr unsigned kVarGetName = 2, kVarGetString = 7, kVarIsDefined = 18, kVarGetInt = 27, kVarGetFloat = 28,
+                   kVarGetVec = 30;
+#else
 constexpr unsigned kSlotGetName = 0, kSlotParamCount = 40, kSlotParams = 41, kSlotShaderName = 49;
 constexpr unsigned kVarGetName = 1, kVarGetString = 6, kVarIsDefined = 17, kVarGetInt = 26, kVarGetFloat = 27,
                    kVarGetVec = 29;
+#endif
 constexpr unsigned kSlotInPage = 7, kSlotPage = 10;
 constexpr unsigned kSlotBind = game::kSlotBind;
 #ifdef PROXY_GAME_L4D2
@@ -134,7 +142,11 @@ constexpr size_t kSubRectPageOffset = 0x4, kSubRectNameOffset = 0x10;
 #else
 constexpr size_t kSubRectPageOffset = 0x4, kSubRectNameOffset = 0xc;
 #endif
+#ifdef PROXY_GAME_BMS
+constexpr size_t kMaterialCount = 0x22, kMaterialParams = 0x38, kMaterialName = 0x18, kMaterialShader = 0x14;
+#else
 constexpr size_t kMaterialCount = 0x22, kMaterialParams = 0x24, kMaterialName = 0x18, kMaterialShader = 0x14;
+#endif
 constexpr size_t kVarType = 0x1c, kVarTexture = 0x24;
 #endif
 // MaterialVarType_t: float 0, string 1, vector 2, texture 3, int 4, fourcc 5, undefined 6, matrix 7, material 8.
@@ -693,6 +705,28 @@ constexpr X86Code kCode = {
     // add ecx,0xc (its name symbol); jmp CUtlSymbol::String
     "83 C1 0C E9",
 };
+#elif defined(PROXY_GAME_BMS)
+// Black Mesa: the getters ask slot 170 (call [eax+0x2a8]); m_pMaterial is at 0x3af8.
+#define X86_VAR_GETTER(tail)                                                                                          \
+  "56 8B F1 8B 0D ? ? ? ? 8B 01 FF 90 A8 02 00 00 85 C0 74 2C F6 46 1C 80 75 26 8A 46 1D 3C FF 74 1F 8B 0D ? ? ? ? " \
+  "0F B6 C0 8D 04 80 8D 34 C5 ? ? ? ? 8B 01 FF 90 A8 02 00 00 85 C0 75 D4 " tail
+constexpr X86Code kCode = {
+    // As Entropy : Zero 2's, m_pMaterial at 0x3af8.
+    "55 8B EC 53 8B D9 57 8B 7D 08 8B 8B F8 3A 00 00 85 C9 74 ? 85 FF 74 ? 8B 01 8B 40 1C FF D0 84 C0 74 ? 8B 07 "
+    "8B CF 8B 40 1C FF D0 84 C0 74 ? 8B 8B F8 3A 00 00 56 8B 01 FF 50 28 8B 17 8B CF 8B F0 FF 52 28 3B F0 5E 0F "
+    "95 C0 EB ? 8B 8B F8 3A 00 00 3B CF 75",
+    // FlushBufferedPrimitives is slot 146 (call [eax+0x248]).
+    "8B 03 8B CB FF 90 48 02 00 00 89 BB F8 3A 00 00 5F 5B 5D C2 04 00", 0x77,
+    // PrecacheVars is slot 65 (call [eax+0x104]); the shader at +0x14.
+    "56 8B F1 6A 00 6A 00 6A 00 8B 06 6A 00 FF 90 04 01 00 00 8B 4E 14 5E 85 C9 74 04 8B 01 FF 20",
+    "8A 49 1C 33 C0 80 E1 0F 80 F9 06 0F 95 C0 C3",
+    "55 8B EC 83 EC 08 53 8B D9 8B 0D ? ? ? ? 56 57 8B 01 FF 90 A8 02 00 00 85 C0 74 2F 8D 49 00 F6 43 1C 80 75 26 8A "
+    "43 1D 3C FF 74 1F 8B 0D ? ? ? ? 0F B6 C0 8D 04 80 8D 1C C5 ? ? ? ? 8B 01 FF 90 A8 02 00 00 85 C0 75 D4 0F B6 43 "
+    "1C 83 E0 0F 83 F8 08 0F 87 ? ? ? ? FF 24 85",
+    // As Entropy : Zero 2's, without reloading [ebx+0x24] for the name call.
+    "8B 4B 24 83 F9 FF 75 0C 5F 5E B8 ? ? ? ? 5B 8B E5 5D C3 8B 01 FF 10",
+    "83 C1 0C E9",
+};
 #endif
 
 // The number of bytes a pattern names (the jump table's address follows
@@ -751,7 +785,11 @@ bool installX86(const void *const *shaderApiVtable) {
       // add ecx,0x18 (the name symbol); jmp CUtlSymbol::String
       {material, kSlotGetName, "83 C1 18 E9", "CMaterial::GetName"},
       {material, kSlotParamCount, "0F B6 41 22 C3", "CMaterial::ShaderParamCount"},
+#ifdef PROXY_GAME_BMS
+      {material, kSlotParams, "8B 41 38 C3", "CMaterial::GetShaderParams"},
+#else
       {material, kSlotParams, "8B 41 24 C3", "CMaterial::GetShaderParams"},
+#endif
       {material, kSlotShaderName, kCode.shaderName, "CMaterial::GetShaderName"},
       // push esi; movzx esi, word [ecx+0x1e] (the name symbol); 0xffff: none
       {var, kVarGetName, "56 0F B7 71 1E B8 FF FF 00 00 66 3B F0", "CMaterialVar::GetName"},

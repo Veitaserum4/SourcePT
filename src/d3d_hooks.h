@@ -32,6 +32,10 @@ void requestTargetContents(const void *texture);
 
 // A render-target texture's size and D3DFORMAT (false: not one).
 bool targetTexture(const void *texture, uint32_t &width, uint32_t &height, uint32_t &format);
+// Reads a render-target texture back now (remix::onUiTargetPixels), at most
+// once a frame: for a 2D draw that samples it (Black Mesa's menus, which
+// another API draws into a shared texture). False: not read.
+bool readTargetForUi(const void *texture);
 // A shader object's D3D9 bytecode (nullptr: not seen at creation).
 std::shared_ptr<const std::vector<uint32_t>> shaderCode(const void *shader);
 

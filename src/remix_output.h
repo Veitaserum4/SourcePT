@@ -161,6 +161,10 @@ void onMaterialBound(const engine_materials::Shading &shading, const char *mater
 // texture makes its record after this frame's Present.
 void onTargetPixels(const void *texture, uint32_t width, uint32_t height, D3DFORMAT format, const uint8_t *data,
                     uint32_t pitch);
+// A render-target texture a 2D (UI) draw samples, read back for it (32-bit,
+// B8G8R8A8 rows): its CPU copy, which the UI registers.
+void onUiTargetPixels(const void *texture, uint32_t width, uint32_t height, D3DFORMAT format, const uint8_t *data,
+                      uint32_t pitch);
 // The draw being captured has a perspective projection (not 2D).
 bool drawIsPerspective();
 void onPresent();

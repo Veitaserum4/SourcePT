@@ -333,7 +333,7 @@ bool loadMaterial(const std::string &name, KeyValues &out, int depth = 0) {
     if (condition.size() > 3 && condition[0] == '>' && condition.find("dx") != std::string::npos)
       for (auto &[k, v] : block)
         kv.values[k] = v;
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   // The shader's DX9 fallback block, as the material system merges it
   // ("SDK_LightmappedGeneric_HDR_DX9", else "..._DX9"; HDR is on): Half-Life
   // 2's materials keep their normal map and reflection mask there (metal/
@@ -1562,7 +1562,7 @@ int materialByName(const std::string &name, bool brush) {
       ++g_world.skippedTranslucent;
       return slot;
     }
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
     // A window imposter (dev/dev_windowportal): a cubemap of the room behind,
     // which the path tracer has itself (see remix_output's onDraw).
     if (kv.shader.rfind("windowimposter", 0) == 0) {

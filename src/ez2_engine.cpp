@@ -1,4 +1,4 @@
-// Entropy : Zero 2: the engine side.
+// Entropy : Zero 2 and Black Mesa (the stock engines): the engine side.
 // Wraps IVRenderView::DrawWorldLists and COverlayMgr::RenderOverlays,
 // announces map changes to load the BSP world and its lights,
 // forces anti-culling and shadow cvars,
@@ -59,12 +59,13 @@ char g_level[260] = {};
 void executeCommand(const char *command) {
   if (!g_engineClient || !command || !*command)
     return;
-  // IVEngineClient slot 106: ClientCmd_Unrestricted(const char *cmd)
+  // IVEngineClient::ClientCmd_Unrestricted(const char *cmd)
   using ClientCmdFn = void(PROXY_THISCALL *)(void *, const char *);
-  reinterpret_cast<ClientCmdFn>((*static_cast<void ***>(g_engineClient))[106])(g_engineClient, command);
+  reinterpret_cast<ClientCmdFn>((*static_cast<void ***>(g_engineClient))[game::kSlotClientCmdUnrestricted])(
+      g_engineClient, command);
 }
 
-// Markers reach the shader API (SetPIXMarker, slot 215) through the render
+// Markers reach the shader API (SetPIXMarker) through the render
 // context, so they stay ordered with the draws when the material system
 // queues rendering to its own thread (mat_queue_mode).
 void marker(const char *text) {
@@ -74,10 +75,12 @@ void marker(const char *text) {
     using GetRenderContextFn = void *(PROXY_THISCALL *)(void *);
     using SetPIXMarkerFn = void(PROXY_THISCALL *)(void *, unsigned long, const char *);
     using ReleaseFn = int(PROXY_THISCALL *)(void *);
-    void *context = reinterpret_cast<GetRenderContextFn>((*static_cast<void ***>(g_materials))[98])(g_materials);
+    void *context =
+        reinterpret_cast<GetRenderContextFn>((*static_cast<void ***>(g_materials))[game::kSlotGetRenderContext])(
+            g_materials);
     if (context) {
       void **vtable = *static_cast<void ***>(context);
-      reinterpret_cast<SetPIXMarkerFn>(vtable[142])(context, 0, text);
+      reinterpret_cast<SetPIXMarkerFn>(vtable[game::kSlotContextSetPIXMarker])(context, 0, text);
       reinterpret_cast<ReleaseFn>(vtable[1])(context);
       return;
     }
@@ -88,9 +91,10 @@ void marker(const char *text) {
 void noteLevel() {
   if (!g_engineClient)
     return;
-  // IVEngineClient slot 51: GetLevelName() -> const char *
+  // IVEngineClient::GetLevelName() -> const char *
   using GetLevelNameFn = const char *(PROXY_THISCALL *)(void *);
-  const char *level = reinterpret_cast<GetLevelNameFn>((*static_cast<void ***>(g_engineClient))[51])(g_engineClient);
+  const char *level = reinterpret_cast<GetLevelNameFn>(
+      (*static_cast<void ***>(g_engineClient))[game::kSlotGetLevelName])(g_engineClient);
   if (!level)
     return;
 
@@ -109,6 +113,31 @@ void noteLevel() {
   marker(text);
 }
 
+#ifdef PROXY_GAME_BMS
+// Black Mesa's IVRenderView::DrawWorldLists (slot 13) and
+// COverlayMgr::RenderOverlays (slot 7) take an argument more (pop 16 and 8
+// bytes; DrawWorldLists' float, the water height, is the fourth): forwarded as
+// they come.
+using DrawWorldListsFn = void(PROXY_THISCALL *)(void *, void *, uint32_t, uint32_t, float);
+DrawWorldListsFn g_drawWorldLists = nullptr;
+
+void PROXY_THISCALL drawWorldLists(void *self, void *worldLists, uint32_t a, uint32_t b, float waterZ) {
+  noteLevel();
+  engine_lights::sample();
+  marker("openremix:world_lists 1");
+  g_drawWorldLists(self, worldLists, a, b, waterZ);
+  marker("openremix:world_lists 0");
+}
+
+using RenderOverlaysFn = void(PROXY_THISCALL *)(void *, int, uint32_t);
+RenderOverlaysFn g_renderOverlays = nullptr;
+
+void PROXY_THISCALL renderOverlays(void *self, int sortGroup, uint32_t a) {
+  marker("openremix:overlays 1");
+  g_renderOverlays(self, sortGroup, a);
+  marker("openremix:overlays 0");
+}
+#else
 // IVRenderView::DrawWorldLists(IWorldRenderList *pList, unsigned long flags, float waterZThreshold)
 // Slot 13, __thiscall, pops 12 bytes.
 using DrawWorldListsFn = void(PROXY_THISCALL *)(void *, void *, unsigned long, float);
@@ -132,6 +161,7 @@ void PROXY_THISCALL renderOverlays(void *self, int sortGroup) {
   g_renderOverlays(self, sortGroup);
   marker("openremix:overlays 0");
 }
+#endif
 
 struct ForcedCvar {
   const char *name;
@@ -168,9 +198,9 @@ void forceCvars() {
   if (!g_cvars)
     return;
 
-  // Slot 14 of VEngineCvar004: ConVar *FindVar(const char *name)
+  // VEngineCvar004: ConVar *FindVar(const char *name)
   using FindVarFn = void *(PROXY_THISCALL *)(void *, const char *);
-  auto findVar = reinterpret_cast<FindVarFn>((*static_cast<void ***>(g_cvars))[14]);
+  auto findVar = reinterpret_cast<FindVarFn>((*static_cast<void ***>(g_cvars))[game::kSlotFindVar]);
   using SetIntFn = void(PROXY_THISCALL *)(void *, int);
 
   for (const auto &fc : kForcedCvars) {
@@ -180,9 +210,11 @@ void forceCvars() {
     auto *bytes = static_cast<uint8_t *>(var);
     // Strip FCVAR_DEVELOPMENTONLY (1<<1), FCVAR_HIDDEN (1<<4), FCVAR_CHEAT (1<<14)
     *reinterpret_cast<int *>(bytes + 0x14) &= ~((1 << 1) | (1 << 4) | (1 << 14));
-    // IConVar is at bytes + 0x18. Slot 2 is SetValue(int)
-    void *iconvar = bytes + 0x18;
-    reinterpret_cast<SetIntFn>((*static_cast<void ***>(iconvar))[2])(iconvar, fc.value);
+    // IConVar is at bytes + 0x18: SetValue(int) (else applyCvars' commands set it).
+    if (game::kConVarSetInt) {
+      void *iconvar = bytes + 0x18;
+      reinterpret_cast<SetIntFn>((*static_cast<void ***>(iconvar))[game::kSlotConVarSetInt])(iconvar, fc.value);
+    }
   }
 }
 
@@ -331,15 +363,17 @@ bool installPortalWindows() {
 bool install() {
   static bool installed = false;
   if (!installed) {
-    g_materials = createInterface("materialsystem.dll", "VMaterialSystem080");
+    g_materials = createInterface("materialsystem.dll", game::kMaterialSystemInterface);
 
     g_renderView = createInterface("engine.dll", "VEngineRenderView014");
     if (!g_renderView)
       g_renderView = createInterface("engine.dll", "VEngineRenderView013");
 
-    g_engineClient = createInterface("engine.dll", "VEngineClient014");
+    g_engineClient = createInterface("engine.dll", game::kEngineClientInterface);
+#ifdef PROXY_GAME_EZ2
     if (!g_engineClient)
       g_engineClient = createInterface("engine.dll", "VEngineClient013");
+#endif
 
     if (g_renderView && g_engineClient) {
       // Hook DrawWorldLists (slot 13)
@@ -420,6 +454,15 @@ void PROXY_THISCALL hookUpdateFlashlightState(void *self, uint16_t handle, const
     g_origUpdateFlashlightState(self, handle, state);
 }
 
+#ifdef PROXY_GAME_BMS
+// Black Mesa's flashlight (setDeferredFlashlight): a projected state of its
+// own, under a handle the engine does not hand out, dropped when its light
+// stops being drawn.
+constexpr uint16_t kDeferredFlashlight = 0xfffe;
+uint64_t g_deferredFlashlightTime = 0; // GetTickCount64 of its last draw (under g_projectedLock)
+const void *g_deferredFlashlightCookie = nullptr;
+#endif
+
 void PROXY_THISCALL hookDestroyShadow(void *self, uint16_t handle) {
   {
     std::lock_guard<std::mutex> lock(g_projectedLock);
@@ -492,7 +535,7 @@ bool sameLights(const std::vector<Light> &a, const std::vector<Light> &b) {
   const auto floats = [](const float *x, const float *y, size_t n) { return !std::memcmp(x, y, n * sizeof(float)); };
   for (size_t i = 0; i < a.size(); ++i) {
     const Light &x = a[i], &y = b[i];
-    if (x.hash != y.hash || x.type != y.type || x.cookie != y.cookie || x.cookieFrame != y.cookieFrame ||
+    if (x.hash != y.hash || x.type != y.type || x.cookie != y.cookie || x.cookieTexture != y.cookieTexture || x.cookieFrame != y.cookieFrame ||
         !floats(x.color, y.color, 3) || !floats(x.position, y.position, 3) || !floats(x.direction, y.direction, 3) ||
         !floats(x.attenuation, y.attenuation, 3) || x.thetaDot != y.thetaDot || x.phiDot != y.phiDot ||
         !floats(x.up, y.up, 3) || x.fov != y.fov)
@@ -529,11 +572,22 @@ void sample() {
   auto snapshot = std::make_shared<Snapshot>();
   {
     std::lock_guard<std::mutex> lock(g_projectedLock);
+#ifdef PROXY_GAME_BMS
+    if (g_deferredFlashlightTime && GetTickCount64() - g_deferredFlashlightTime > 250) {
+      g_projectedStates.erase(kDeferredFlashlight);
+      g_deferredFlashlightTime = 0;
+    }
+#endif
     for (const auto &[handle, s] : g_projectedStates) {
       Light l;
       l.hash = 0x70726f6a74657800ull ^ (uint64_t(handle) * 0x9e3779b97f4a7c15ull);
-      if (fromProjected(s, l))
+      if (fromProjected(s, l)) {
+#ifdef PROXY_GAME_BMS
+        if (handle == kDeferredFlashlight)
+          l.cookieTexture = g_deferredFlashlightCookie;
+#endif
         snapshot->projected.push_back(l);
+      }
     }
     std::sort(snapshot->projected.begin(), snapshot->projected.end(),
               [](const Light &a, const Light &b) { return a.hash < b.hash; });
@@ -558,6 +612,60 @@ void sample() {
 }
 
 bool stylesActive() { return false; }
+
+#ifdef PROXY_GAME_BMS
+void setDeferredFlashlight(const float position[4], const float direction[4], const float color[4],
+                           const void *cookie) {
+  const float f[3] = {direction[0], direction[1], direction[2]};
+  const float length = std::sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+  if (!finite3(position) || !(length > 0.5f && length < 2.0f) || !(direction[3] > 0 && direction[3] < 1))
+    return;
+  // The rotation whose +X is the beam and +Z up (as fromProjected reads it).
+  float x[3] = {f[0] / length, f[1] / length, f[2] / length};
+  float z[3] = {0, 0, 1};
+  if (std::fabs(x[2]) > 0.99f)
+    z[0] = 1, z[2] = 0;
+  const float d = x[0] * z[0] + x[1] * z[1] + x[2] * z[2];
+  for (int i = 0; i < 3; ++i)
+    z[i] -= d * x[i];
+  const float zl = std::sqrt(z[0] * z[0] + z[1] * z[1] + z[2] * z[2]);
+  for (float &c : z)
+    c /= zl;
+  const float y[3] = {z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]};
+  // Columns x, y, z to a quaternion (x, y, z, w).
+  const float m00 = x[0], m11 = y[1], m22 = z[2];
+  float q[4];
+  const float trace = m00 + m11 + m22;
+  if (trace > 0) {
+    const float t = std::sqrt(trace + 1) * 2;
+    q[3] = t / 4, q[0] = (y[2] - z[1]) / t, q[1] = (z[0] - x[2]) / t, q[2] = (x[1] - y[0]) / t;
+  } else if (m00 > m11 && m00 > m22) {
+    const float t = std::sqrt(1 + m00 - m11 - m22) * 2;
+    q[3] = (y[2] - z[1]) / t, q[0] = t / 4, q[1] = (y[0] + x[1]) / t, q[2] = (z[0] + x[2]) / t;
+  } else if (m11 > m22) {
+    const float t = std::sqrt(1 + m11 - m00 - m22) * 2;
+    q[3] = (z[0] - x[2]) / t, q[0] = (y[0] + x[1]) / t, q[1] = t / 4, q[2] = (z[1] + y[2]) / t;
+  } else {
+    const float t = std::sqrt(1 + m22 - m00 - m11) * 2;
+    q[3] = (x[1] - y[0]) / t, q[0] = (z[0] + x[2]) / t, q[1] = (z[1] + y[2]) / t, q[2] = t / 4;
+  }
+  FlashlightState s = {};
+  std::memcpy(s.origin, position, 12);
+  std::memcpy(s.orientation, q, 16);
+  s.nearZ = 4;
+  s.farZ = position[3] > 0 ? position[3] : 1000;
+  s.horizontalFov = s.verticalFov = 2 * std::acos(direction[3]) * 57.29577951f;
+  // The falloff of Source's flashlight (r_flashlightlinear 100), as in Entropy : Zero 2.
+  s.linear = 100;
+  for (int i = 0; i < 3; ++i)
+    s.color[i] = color[i] * (color[3] > 0 ? color[3] : 1);
+  s.color[3] = 0;
+  std::lock_guard<std::mutex> lock(g_projectedLock);
+  g_projectedStates[kDeferredFlashlight] = s;
+  g_deferredFlashlightTime = GetTickCount64();
+  g_deferredFlashlightCookie = cookie;
+}
+#endif
 
 void activate(uint32_t sequence) {
   std::lock_guard<std::mutex> lock(g_snapshotLock);

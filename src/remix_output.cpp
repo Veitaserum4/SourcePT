@@ -45,7 +45,7 @@
 #include <vector>
 
 namespace proxy::remix {
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
 
 inline bool nameStarts(const char *name, const char *prefix) { return _strnicmp(name, prefix, std::strlen(prefix)) == 0; }
 
@@ -112,7 +112,7 @@ struct Stats {
   std::atomic<uint32_t> decalKinds[5] = {};
   std::atomic<uint32_t> decalByFlag{0}, decalByShader{0}, decalByBias{0}, decalByCategory{0}, decalBiasOnly{0},
       decalMaterialOnly{0}, decalWorld{0}, decalSkinned{0}, decalVertexNormals{0}, decalFaceNormals{0},
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
       decalVertexColors{0}, decalModulateFade{0}, decalOtherBlend{0}, decalNotItsBlend{0}, decalNoMesh{0},
       decalNoBase{0};
 #else
@@ -301,7 +301,7 @@ struct CpuTexture {
   uint32_t width = 0, height = 0;
   D3DFORMAT format = D3DFMT_UNKNOWN;
   std::vector<uint8_t> data;
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   uint32_t version = 1;
 #else
   uint32_t version = 0;
@@ -334,7 +334,7 @@ bool levelLayout(D3DFORMAT format, uint32_t width, uint32_t height, uint32_t &ro
     rowBytes = width * 4;
     rows = height;
     return true;
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   case D3DFMT_A8:
   case D3DFMT_L8:
     rowBytes = width;
@@ -369,7 +369,7 @@ bool levelLayout(D3DFORMAT format, uint32_t width, uint32_t height, uint32_t &ro
 
 // CPU copies feed UI textures (RegisterUITexture). GMod's Chromium panels
 // (main menu, DHTML) are A8R8G8B8 textures of up to 2048x2048 or more.
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
 // Font cache textures (A8 / L8) can also reach up to 2048x2048.
 bool keepCpuCopy(D3DFORMAT format, uint32_t width, uint32_t height) {
   return uint64_t(width) * height <= 4096u * 4096u;
@@ -728,7 +728,7 @@ uint64_t textureHash(const void *texture) {
   if (!texture)
     return 0;
   std::lock_guard<std::recursive_mutex> lock(g_textureLock);
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   auto t = findOrRealizeTexture(texture);
   return t ? t->hash : 0;
 }
@@ -928,7 +928,7 @@ remixapi_MaterialHandle materialFor(const void *texture, float skyBrightness = 0
   if (const int slot = screenSlot(texture); slot >= 0)
     return screenMaterial(slot);
   std::lock_guard<std::recursive_mutex> lock(g_textureLock);
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   auto t = findOrRealizeTexture(texture);
   return t ? ensureMaterial(*t, skyBrightness, nearest) : nullptr;
 #else
@@ -1026,7 +1026,7 @@ struct NamedTexture {
 // The runtime texture's hash of the live upload known by `hash` (its own or
 // its opaque alias), or 0. Caller holds g_textureLock.
 uint64_t uploadedTextureHash(uint64_t hash) {
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   if (!hash)
     return 0;
   auto found = g_texturesByHash.find(hash);
@@ -1092,7 +1092,7 @@ uint64_t maskTextureHash(const std::string &name, bool count = true, uint32_t fr
 // transparent). Otherwise as ensureMaterial.
 remixapi_MaterialHandle clampedMaterialFor(const void *texture, bool nearest = false) {
   std::lock_guard<std::recursive_mutex> lock(g_textureLock);
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   auto found = findOrRealizeTexture(texture);
   if (!found)
     return nullptr;
@@ -1128,7 +1128,7 @@ remixapi_MaterialHandle clampedMaterialFor(const void *texture, bool nearest = f
 
 // The lit material of the uploaded texture a name stands for (nullptr: its
 // file gave no hashes, or none of them is uploaded now). For draws whose base
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
 // texture is not on sampler 0 (onDraw: the Cable shader, decals, particles). The record is held
 // by the engine's D3D texture (g_textures), as a draw's own texture's is.
 remixapi_MaterialHandle materialForName(const std::string &name, bool nearest = false) {
@@ -1503,7 +1503,7 @@ remixapi_MaterialHandle materialFor(const void *texture, const engine_materials:
     return materialFor(texture, 0, nearest);
   const bool lights = emissiveLights(s, false);
   std::lock_guard<std::recursive_mutex> lock(g_textureLock);
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   auto t = findOrRealizeTexture(texture);
   if (!t)
     return nullptr;
@@ -1519,7 +1519,7 @@ remixapi_MaterialHandle materialFor(const void *texture, const engine_materials:
     Shading lit = s;
     lit.mode = Shading::Lit;
     if (!maps.use)
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
       return ensureMaterial(*t, 0, nearest);
     if (EmissiveMaterial *variant = ensureEmissive(*t, lit, 0, false, nullptr, maps, nearest)) {
       countPbr(maps);
@@ -1566,7 +1566,7 @@ remixapi_MaterialHandle materialFor(const void *texture, const engine_materials:
     g_stats.emissiveLightDraws += lights;
     return variant->handle;
   }
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   return ensureMaterial(*t, 0, nearest);
 #else
   return ensureMaterial(*it->second, 0, nearest);
@@ -1862,7 +1862,7 @@ enum : uint8_t { kStencilNone, kStencilSource, kStencilSourceOnly, kStencilInsid
 std::vector<StencilGroup> g_stencilGroups;           // this frame's
 std::unordered_map<uint32_t, int> g_stencilCurrent;  // stencil value -> its current group
 std::vector<std::pair<int, bool>> g_uiCommandMasks;  // per g_uiCommands entry: group (-1 none), outside
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
 // Stencil layers (Entropy : Zero 2's GamepadUI): each panel draws with a
 // lower reference than the one in front of it (GREATEREQUAL, REPLACE), the
 // front one first, so what a panel covered hides the panels behind it.
@@ -2217,7 +2217,7 @@ remixapi_UITextureHandle uiTextureFor(const void *texture) {
   if (it == g_cpuTextures.end())
     return 0;
   auto &t = *it->second;
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   const auto id = static_cast<remixapi_UITextureHandle>(reinterpret_cast<uintptr_t>(texture));
 #else
   const auto id = static_cast<remixapi_UITextureHandle>(reinterpret_cast<uintptr_t>(it->second.get()));
@@ -2257,7 +2257,7 @@ remixapi_UITextureHandle uiTextureFor(const void *texture) {
       return id;
     }
   }
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   if (!t.registeredVersion || t.registeredVersion != t.version) {
     if (t.data.empty() || !t.width || !t.height)
       return 0;
@@ -2274,7 +2274,7 @@ remixapi_UITextureHandle uiTextureFor(const void *texture) {
       rgba = formats::decodeBC1(t.data.data(), t.width, t.height);
     } else if (t.format == D3DFMT_DXT5) {
       rgba = formats::decodeBC3(t.data.data(), t.width, t.height);
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
     } else if (t.format == D3DFMT_A8) {
       rgba.resize(size_t(t.width) * t.height * 4);
       for (size_t i = 0; i < t.data.size() && i * 4 + 3 < rgba.size(); ++i) {
@@ -2305,7 +2305,7 @@ remixapi_UITextureHandle uiTextureFor(const void *texture) {
         for (size_t i = 3; i < rgba.size(); i += 4)
           rgba[i] = 0xff;
     }
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
     if (rgba.size() != size_t(t.width) * t.height * 4)
       return 0;
 #endif
@@ -2316,7 +2316,7 @@ remixapi_UITextureHandle uiTextureFor(const void *texture) {
     }
     if (registered != REMIXAPI_ERROR_CODE_SUCCESS)
       return 0;
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
     t.registeredVersion = t.version ? t.version : 1;
 #else
     t.registeredVersion = t.version;
@@ -2354,7 +2354,7 @@ uint32_t uiBlendFlags(const Draw &d) {
   return REMIXAPI_UI_NATIVE_CUSTOM_BLEND | factor(src) << REMIXAPI_UI_NATIVE_SRC_BLEND_SHIFT |
          factor(dst) << REMIXAPI_UI_NATIVE_DST_BLEND_SHIFT;
 }
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
 
 extern FILE *g_dumpFlat;
 #endif
@@ -2367,7 +2367,15 @@ void captureUi(const Draw &d) {
     return;
   // Stencil (see StencilGroup): NEVER only writes and shows nothing; a test
   // names the group this draw is limited to.
+#ifdef PROXY_GAME_BMS
+  // Black Mesa's menus (a whole-screen quad of a __vgui_texture) are stencil
+  // tested against what the engine drew: not a masked fill.
+  const char *uiMaterial = engine_materials::currentName();
+  const bool menu = uiMaterial && std::strncmp(uiMaterial, "__vgui_texture", 14) == 0;
+  const bool stencilTested = d.stencil && d.stencilFunc != D3DCMP_ALWAYS && !menu;
+#else
   const bool stencilTested = d.stencil && d.stencilFunc != D3DCMP_ALWAYS;
+#endif
   // 2D marks (round avatars' circles) cannot be mask sources: what tests the
   // value afterwards has no known group.
   if (d.stencil && ((d.stencilFunc == D3DCMP_ALWAYS && d.stencilPass == D3DSTENCILOP_REPLACE) ||
@@ -2387,6 +2395,12 @@ void captureUi(const Draw &d) {
       maskGroup = stencilReader(value + 1);
   }
   remixapi_UITextureHandle texture = 0;
+#ifdef PROXY_GAME_BMS
+  // Black Mesa's menus: Qt draws them (through ANGLE) into a shared render
+  // target, which the game lays over the screen: read back for the UI.
+  if (menu && d.texture0 && d.texture0Target)
+    d3d::readTargetForUi(d.texture0);
+#endif
   if (d.texture0 && !(texture = uiTextureFor(d.texture0))) {
     ++g_stats.uiNoTexture; // render-target sampling (post-processing): not UI
     // A halo's blurred image, composited once per pass outside the sources.
@@ -2488,7 +2502,7 @@ void captureUi(const Draw &d) {
     }
     g_uiVertices.push_back(out);
   }
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   const bool layer = d.stencil && d.stencilFunc == D3DCMP_GREATEREQUAL && d.stencilPass == D3DSTENCILOP_REPLACE &&
                      (d.stencilRef & d.stencilMask & 0xff) > 0;
   if (layer) {
@@ -2537,7 +2551,7 @@ void captureUi(const Draw &d) {
         ++g_stats.uiStencil;
         return;
       }
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
     } else {
       maskGroup = -1;
 #endif
@@ -2550,7 +2564,7 @@ void captureUi(const Draw &d) {
   command.indexOffset = uint32_t(g_uiIndices.size());
   for (uint32_t i : indices)
     g_uiIndices.push_back(base + i - low);
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   if (g_dumpFlat) {
     float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
     for (size_t i = base; i < g_uiVertices.size(); ++i) {
@@ -3236,7 +3250,7 @@ void serviceFlatDumpRequest() {
   const std::wstring request = g_moduleDir + L"\\shaderapi_proxy_flat.request";
   if (GetFileAttributesW(request.c_str()) == INVALID_FILE_ATTRIBUTES)
     return;
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   int requestedFrames = 300;
   if (FILE *rf = _wfopen(request.c_str(), L"r")) {
     int val = 0;
@@ -3677,6 +3691,12 @@ void applySkyDome() {
 void onCreateDevice(HWND gameWindow, D3DPRESENT_PARAMETERS *pp) {
   if (!enabled() || !pp)
     return;
+#ifdef PROXY_GAME_BMS
+  // Black Mesa creates a second device (1x1, it never presents) once the game's
+  // runs: OpenRemix keeps the game's window and size (a Reset passes no window).
+  if (g_ready && gameWindow)
+    return;
+#endif
   if (gameWindow || !g_gameWindow)
     g_gameWindow = pp->hDeviceWindow ? pp->hDeviceWindow : gameWindow;
   g_displayWidth = pp->BackBufferWidth;
@@ -3704,6 +3724,16 @@ void onDeviceCreated(IDirect3DDevice9 *) {
     diag::stage("Direct3D device created (OpenRemix %s)", g_ready ? "already running" : "disabled");
     return;
   }
+#ifdef PROXY_GAME_BMS
+  // Black Mesa first creates a device on a hidden 1x1 window (a probe of the
+  // hardware): OpenRemix waits for the game window's.
+  RECT client = {};
+  if (g_gameWindow && GetClientRect(g_gameWindow, &client) && client.right < 64 && client.bottom < 64) {
+    diag::stage("Direct3D device created on a %ldx%ld window: not the game's, OpenRemix waits", client.right,
+                client.bottom);
+    return;
+  }
+#endif
   diag::stage("Direct3D device created");
   g_ready = startRemix();
   diag::stage("OpenRemix: start-up %s", g_ready ? "complete" : "FAILED: the game goes on without it");
@@ -3934,7 +3964,7 @@ struct ParticleRow {
 };
 std::unordered_map<uint64_t, ParticleRow> g_particleRows; // per interval; under g_transientSampleLock
 std::unordered_set<uint64_t> g_particlesDumped;           // under g_transientSampleLock
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
 // OPENREMIX_PROXY_DUMP_PARTICLES=1, or bin/shaderapi_proxy_particles.request
 // (in a running game: starts bin/particles.txt over). Render thread.
 bool g_dumpParticles = [] {
@@ -3966,7 +3996,7 @@ struct ParticleLeft {
 std::map<std::string, ParticleLeft> g_particlesLeft;
 std::atomic<uint32_t> g_usParticles{0};
 
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
 #else
 bool nameStarts(const char *name, const char *prefix) { return _strnicmp(name, prefix, std::strlen(prefix)) == 0; }
 #endif
@@ -3981,7 +4011,7 @@ bool particlesEnabled() {
 
 // The material lies in one of the particle directories.
 bool particleMaterialPath(const char *material) {
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   if (nameStarts(material, "materials/") || nameStarts(material, "materials\\"))
     material += 10;
 #endif
@@ -3998,7 +4028,7 @@ bool particleMaterialPath(const char *material) {
       }
     return list;
   }();
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   std::string norm = material;
   for (char &c : norm)
     c = c == '\\' ? '/' : char(std::tolower(static_cast<unsigned char>(c)));
@@ -4110,7 +4140,7 @@ void dumpParticleDraw(const Draw &d, ParticleKind kind, const char *outcome, con
                       uint32_t spriteFlags, const float *spriteSoft, bool softConfirmed,
                       const particles::SpriteVertex *sprites, const vsprog::Stream *streams, uint32_t first, uint32_t count, const particles::Vertex *expanded,
                       const particles::Result *result) {
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   bool &truncate = g_particlesTruncate;
 #else
   static bool truncate = true;
@@ -4119,7 +4149,7 @@ void dumpParticleDraw(const Draw &d, ParticleKind kind, const char *outcome, con
   truncate = false;
   if (!f)
     return;
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   {
     // Sampler 0's texture as the proxy holds it, and what the material came from.
     std::lock_guard<std::recursive_mutex> lock(g_textureLock);
@@ -4273,7 +4303,7 @@ bool submitParticles(const Draw &d, ParticleKind kind, uint64_t viewKey, const f
   Timer timer(g_usParticles);
   using engine_materials::Shading;
   const engine_materials::Bound &bound = engine_materials::bound();
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   const bool dumpAll = g_dumpParticles;
 #else
   static const bool dumpAll = [] {
@@ -4378,7 +4408,7 @@ bool submitParticles(const Draw &d, ParticleKind kind, uint64_t viewKey, const f
           spriteFlags |= REMIXAPI_SPRITE_SEQUENCE_MAX_LUMINANCE_EXT;
       }
     }
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
     // UnlitGeneric takes $depthblend too (Entropy : Zero 2's impact dust).
     if ((spritecard || nameStarts(bound.shader, "unlitgeneric")) && overlay) {
 #else
@@ -4566,7 +4596,7 @@ bool submitParticles(const Draw &d, ParticleKind kind, uint64_t viewKey, const f
     inst.blend.textureAlphaArg1Source = 1;
     inst.blend.textureAlphaArg2Source = 2;
     const bool nearest = isPointSampler(d.samplerStates, 0);
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
     Shading shading;
     if (traced) {
 #else
@@ -4579,7 +4609,7 @@ bool submitParticles(const Draw &d, ParticleKind kind, uint64_t viewKey, const f
     } else {
       inst.material = d.texture0 ? materialFor(d.texture0, 0, nearest) : nullptr;
       inst.rasterOnly = true;
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
     }
     g_particleSource = inst.material ? "sampler 0" : "";
     // Sampler 0's texture not uploaded (yet): the base texture by name, then
@@ -4680,7 +4710,7 @@ bool submitParticles(const Draw &d, ParticleKind kind, uint64_t viewKey, const f
     }
     if (dumpAll && g_particlesDumped.size() < 512) {
       uint64_t dumpKey = rowKey ^ (outcome == kParticleFailed ? 0x5a5a5a5a5a5a5a5aull : 0);
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
       // Once per material too (one layout and shader carries many effects).
       const char *material = engine_materials::currentName();
       dumpKey = fnv(material, std::strlen(material), dumpKey);
@@ -4922,7 +4952,7 @@ std::shared_ptr<RemixTexture> stageRecord(const Draw &d, int stage) {
   const void *texture = stageTexture(d, stage);
   if (!texture)
     return nullptr;
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   auto t = findOrRealizeTexture(texture);
   return t && t->texture ? t : nullptr;
 #else
@@ -5665,6 +5695,32 @@ void onDraw(const Draw &d) {
   // So are the draws of screenspace_general materials (addons' own shaders)
   // whatever their projection: a sky dome drawn against a depth buffer, say.
   const auto &material = engine_materials::bound();
+#ifdef PROXY_GAME_BMS
+  // Black Mesa's flashlight is a deferred light (GBLight) drawn into its light
+  // buffer, which the path tracer does not see: a spotlight from the draw's
+  // pixel shader constants (c8 position and range, c9 colour and intensity,
+  // c11 direction and the outer cone's cosine).
+  if (const char *name = engine_materials::currentName();
+      d.psConstants && name && std::strncmp(name, "__gblightspot_flashlight", 24) == 0) {
+    // Its cookie: the first texture it samples that is neither a render target
+    // (the light buffer's inputs) nor a depth map (the shadow's): a DXT or
+    // 32-bit image (sampler 4, 512x512 DXT1, here).
+    const void *cookie = nullptr;
+    for (int n = 0; n < 8 && !cookie; ++n) {
+      if (!d.textures[n] || (d.textureTargets & (1u << n)))
+        continue;
+      auto *base = const_cast<IDirect3DBaseTexture9 *>(static_cast<const IDirect3DBaseTexture9 *>(d.textures[n]));
+      D3DSURFACE_DESC desc = {};
+      if (base->GetType() != D3DRTYPE_TEXTURE || FAILED(static_cast<IDirect3DTexture9 *>(base)->GetLevelDesc(0, &desc)))
+        continue;
+      if (desc.Format == D3DFMT_DXT1 || desc.Format == D3DFMT_DXT3 || desc.Format == D3DFMT_DXT5 ||
+          desc.Format == D3DFMT_A8R8G8B8 || desc.Format == D3DFMT_X8R8G8B8)
+        cookie = d.textures[n];
+    }
+    engine_lights::setDeferredFlashlight(d.psConstants + 8 * 4, d.psConstants + 11 * 4, d.psConstants + 9 * 4,
+                                         cookie);
+  }
+#endif
   if (hostpass::wants(d)) {
     float projection[16];
     getMatrix(kMatrixProjection, projection);
@@ -5672,7 +5728,7 @@ void onDraw(const Draw &d) {
     const bool screenspace = material.known && nameStarts(material.shader, "screenspace_general");
     const bool isExoModel = screenspace && (material.isModel || engine_materials::current().pbr.active);
     const bool custom = screenspace && !isExoModel;
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
     // Distortion (heat haze, particle/warp4_warp; refracting glass): the
     // Refract shader samples the frame the engine copied (_rt_PowerOfTwoFB),
     // which as a host copy is the path-traced frame, so the game's own shader
@@ -5918,7 +5974,7 @@ void onDraw(const Draw &d) {
     g_cameraSpace.valid = true;
   }
   const bool dynamicDraw = ps.dynamic || d.indices.dynamic;
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   // Heat haze and other moving distortion (particle/warp4_warp: the Refract
   // shader on a dynamic sprite) refracts a copy of the frame behind it, which
   // the runtime does not have: drawn, its normal map showed as a coloured
@@ -5976,7 +6032,7 @@ void onDraw(const Draw &d) {
   // Particles leave here: before the flashlight-pass filter (an additive
   // Spritecard or unlit draw is never that pass, whatever texture it holds),
   // and outside the decal, emissive and mesh-cache logic below.
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   if (particle != kNotParticle) {
     submitParticles(d, particle, instanceView, cameraToWorld, categories & ~kDecalCategories, eye, view.projection);
     return;
@@ -6001,7 +6057,7 @@ void onDraw(const Draw &d) {
       left.dstBlend = d.dstBlend;
     }
   }
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   if (!skinnedDraw && !d.blend && bsp::isStaticProp(d.vsConstants + kRegModel * 4, eye)) {
 #else
   if (!d.blend && bsp::isStaticProp(d.vsConstants + kRegModel * 4, eye)) {
@@ -6057,7 +6113,7 @@ void onDraw(const Draw &d) {
       cookies.clear();
       cookieEpoch = g_skyEpoch;
     }
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
     // Lit surface materials are not additive; an additive pass over one is an engine
     // lighting or flashlight pass. Likewise any static geometry already drawn opaque earlier.
     const bool litPass = engine_materials::currentIsLitOpaque();
@@ -6504,7 +6560,7 @@ void onDraw(const Draw &d) {
   // COLOR0 is the lighting the engine sampled along the rope on the CPU, so
   // it is not forwarded: the path tracer lights them.
   const bool nearest = isPointSampler(d.samplerStates, 0);
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   const bool isDecalDraw = lifted || decal || (bound.known && (bound.decal || bound.decalShader || bound.modulate));
   if (isDecalDraw) {
     const std::string &base = engine_materials::current().base;
@@ -7912,8 +7968,8 @@ void onPresent() {
           l.phiDot = e.phiDot;
           // The cookie once the runtime has its texture (until then a cone;
           // the definition changes when it arrives).
-          if (!e.cookie.empty())
-            if (const uint64_t cookie = maskTextureHash(e.cookie, false, uint32_t(e.cookieFrame))) {
+          if (const uint64_t cookie = !e.cookie.empty() ? maskTextureHash(e.cookie, false, uint32_t(e.cookieFrame))
+                                      : textureHash(e.cookieTexture)) {
               l.cookie = cookie;
               std::memcpy(l.cookieUp, e.up, 12);
               l.cookieFov = e.fov;
@@ -7993,7 +8049,7 @@ void onPresent() {
   }
   ui.pCommands = g_uiCommands.data();
   ui.commandCount = uint32_t(g_uiCommands.size());
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   const auto uiResult = g_api.SubmitUIDrawList(&ui);
   if (uiResult != REMIXAPI_ERROR_CODE_SUCCESS && ui.commandCount > 0) {
     static uint64_t s_lastLog = 0;
@@ -8014,7 +8070,7 @@ void onPresent() {
   g_uiIndices.clear();
   g_uiCommands.clear();
   g_uiCommandMasks.clear();
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   g_uiLayers.clear();
 #endif
 
@@ -8025,7 +8081,7 @@ void onPresent() {
   serviceFlatDumpRequest();
   serviceMaterialProbeRequest();
   serviceShaderProbeRequest();
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   serviceParticleDumpRequest();
 #endif
   serviceFixedFunctionProbeRequest();
@@ -8120,7 +8176,7 @@ void onPresent() {
   }
 }
 
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
 #else
 // Caller holds g_textureLock.
 void storeCpuCopy(const void *texture, uint32_t width, uint32_t height, D3DFORMAT format, std::vector<uint8_t> pixels) {
@@ -8284,7 +8340,7 @@ void onTextureUpload(const void *texture, uint32_t width, uint32_t height, D3DFO
   remixapi_Format remixFormat;
   uint32_t rowBytes, rows;
   if (!textureLayout(format, width, height, remixFormat, rowBytes, rows)) {
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
     if (keepCpuCopy(format, width, height) && levelLayout(format, width, height, rowBytes, rows)) {
       std::vector<uint8_t> pixels = packLevel(data, pitch, rowBytes, rows);
       std::lock_guard<std::recursive_mutex> lock(g_textureLock);
@@ -8336,7 +8392,7 @@ void onTextureUpload(const void *texture, uint32_t width, uint32_t height, D3DFO
     if (auto existing = shared->second.lock()) {
       g_textures[texture] = std::move(existing);
       g_pendingTextures.erase(texture);
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
       return;
     }
   }
@@ -8386,7 +8442,7 @@ void onTextureLevel(const void *texture, uint32_t level, uint32_t width, uint32_
   if (format == D3DFMT_X8R8G8B8)
     for (size_t i = 3; i < pixels.size(); i += 4)
       pixels[i] = 0xff;
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   if (isUnpackFormat(format))
     pixels = unpackToBgra(format, levelWidth, levelHeight, pixels.data(), pixels.size());
 #endif
@@ -8413,7 +8469,7 @@ void onTexturePartialUpload(const void *texture, uint32_t width, uint32_t height
   const uint32_t x1 = (uint32_t(rect.right) + unit - 1) / unit, y1 = (uint32_t(rect.bottom) + unit - 1) / unit;
   std::lock_guard<std::recursive_mutex> lock(g_textureLock);
   auto &cpu = g_cpuTextures[texture];
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   if (!cpu || cpu.use_count() > 1 || cpu->width != width || cpu->height != height || cpu->format != format) {
     auto newCpu = std::make_shared<CpuTexture>();
     newCpu->width = width;
@@ -8459,7 +8515,7 @@ void onTexturePartialUpload(const void *texture, uint32_t width, uint32_t height
     return;
   cpu->touch(changedX0 * unit, changedY0 * unit, changedX1 * unit, changedY1 * unit);
   ++cpu->version;
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   g_textures.erase(texture);
 #endif
 }
@@ -8494,6 +8550,17 @@ PFN_remixapi_UpdateTextureEXT targetUpdateEntry() {
         reinterpret_cast<void *>(GetProcAddress(game::runtimeModule(), "remixapi_UpdateTextureEXT")));
   }();
   return entry;
+}
+
+void onUiTargetPixels(const void *texture, uint32_t width, uint32_t height, D3DFORMAT format, const uint8_t *data,
+                      uint32_t pitch) {
+  if (!data || !width || !height)
+    return;
+  std::vector<uint8_t> pixels(size_t(width) * height * 4);
+  for (uint32_t y = 0; y < height; ++y)
+    std::memcpy(pixels.data() + size_t(y) * width * 4, data + size_t(y) * pitch, size_t(width) * 4);
+  std::lock_guard<std::recursive_mutex> lock(g_textureLock);
+  storeCpuCopy(texture, width, height, format, std::move(pixels));
 }
 
 void onTargetPixels(const void *texture, uint32_t width, uint32_t height, D3DFORMAT format, const uint8_t *data,
@@ -8635,7 +8702,7 @@ void onMaterialBound(const engine_materials::Shading &shading, const char *mater
 
 void onTextureCopy(const void *source, const void *destination) {
   std::lock_guard<std::recursive_mutex> lock(g_textureLock);
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   // A user-memory texture: what it holds now is in that memory.
   if (const auto user = g_userMemoryTextures.find(source); user != g_userMemoryTextures.end()) {
     const UserMemoryTexture u = user->second;
@@ -8674,7 +8741,7 @@ void initCpuTexture(const void *texture, uint32_t width, uint32_t height, D3DFOR
 }
 
 void onUserMemoryTexture(const void *texture, uint32_t width, uint32_t height, D3DFORMAT format, const uint8_t *bits) {
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   std::lock_guard<std::recursive_mutex> lock(g_textureLock);
   g_userMemoryTextures[texture] = {bits, width, height, format};
 #endif
@@ -8775,14 +8842,14 @@ void onTextureSubCopy(const void *source, const void *destination, const RECT *s
 
 void onTextureReleased(const void *texture) {
   std::lock_guard<std::recursive_mutex> lock(g_textureLock);
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   g_userMemoryTextures.erase(texture);
 #endif
   g_textures.erase(texture);
   g_pendingTextures.erase(texture);
   auto cpu = g_cpuTextures.find(texture);
   if (cpu != g_cpuTextures.end()) {
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
     if (cpu->second && cpu->second->registeredVersion && g_ready)
       g_api.FreeUITexture(static_cast<remixapi_UITextureHandle>(reinterpret_cast<uintptr_t>(texture)));
 #else
@@ -9500,7 +9567,7 @@ bool texturePixels(const void *texture, uint32_t &width, uint32_t &height, uint3
     return false;
   const auto &t = *it->second;
   const bool wide = t.format == D3DFMT_A8R8G8B8 || t.format == D3DFMT_X8R8G8B8;
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
   if (!wide && t.format != D3DFMT_DXT1 && t.format != D3DFMT_DXT5 && !isUnpackFormat(t.format))
     return false;
   width = t.width;

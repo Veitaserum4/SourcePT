@@ -185,7 +185,7 @@ void addVpk(const std::wstring &dirFile) {
     g_paths.push_back({{}, std::move(vpk)});
 }
 
-#if defined(PROXY_GAME_HL2RTX) || defined(PROXY_GAME_EZ2)
+#if defined(PROXY_GAME_HL2RTX) || defined(PROXY_STOCK_ENGINE)
 // A "directory/*" search path: its subdirectories loose and its packages
 // (<name>_dir.vpk), in alphabetical order as the engine mounts them.
 void addEach(const std::wstring &directory) {
@@ -346,6 +346,19 @@ void index() {
   addVpk(L"platform\\platform_misc_dir.vpk");
   addLoose(L"ep2");
   addLoose(L"episodic");
+  addLoose(L"hl2");
+  addLoose(L"platform");
+#elif defined(PROXY_GAME_BMS)
+  // bms/gameinfo.txt SearchPaths: bms/custom/*, Black Mesa's packages, Half-Life
+  // 2's and the platform's, then bms, hl2 and platform loose.
+  addEach(L"bms\\custom");
+  for (const wchar_t *vpk : {L"bms_textures", L"bms_materials", L"bms_models", L"bms_misc", L"bms_sounds_misc",
+                             L"bms_sound_vo_english", L"bms_maps"})
+    addVpk(std::wstring(L"bms\\") + vpk + L"_dir.vpk");
+  for (const wchar_t *vpk : {L"hl2_misc", L"hl2_sounds_misc", L"hl2_textures", L"hl2_materials", L"hl2_models"})
+    addVpk(std::wstring(L"hl2\\") + vpk + L"_dir.vpk");
+  addVpk(L"platform\\platform_misc_dir.vpk");
+  addLoose(L"bms");
   addLoose(L"hl2");
   addLoose(L"platform");
 #endif

@@ -30,7 +30,7 @@ bool install() { return false; }
 void dumpStatistics(FILE *) {}
 } // namespace proxy::engine_shadows
 
-#if !defined(PROXY_GAME_EZ2)
+#if !defined(PROXY_STOCK_ENGINE)
 namespace proxy::engine_lights {
 bool install() { return false; }
 void sample() {}

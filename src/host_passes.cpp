@@ -300,7 +300,7 @@ const Shader *shaderFor(const void *object) {
     ::dxvk::DxsoReader reader(reinterpret_cast<const char *>(code->data()));
     ::dxvk::DxsoModule module(reader);
     ::dxvk::DxsoModuleInfo info = {};
-#if defined(PROXY_GAME_EZ2)
+#if defined(PROXY_STOCK_ENGINE)
     // DxsoOptions' constructor leaves its members unset: whatever the stack held
     // (forceSamplerTypeSpecConstants among them) made a shader declare one sampler
     // type and sample another, which the driver could not run.

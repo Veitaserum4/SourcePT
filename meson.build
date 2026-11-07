@@ -22,6 +22,9 @@ endif
 if game == 'ez2' and cpu != 'x86'
   error('the Entropy: Zero 2 proxy is a 32-bit DLL: configure with cross/i686-w64-mingw32.txt')
 endif
+if game == 'bms' and cpu != 'x86'
+  error('the Black Mesa proxy is a 32-bit DLL: configure with cross/i686-w64-mingw32.txt')
+endif
 
 remix_inc = get_option('openremix_include')
 if remix_inc == ''
@@ -86,7 +89,12 @@ else
     def_file = 'shaderapidx9_hl2rtx.def'
   elif game == 'ez2'
     # Entropy : Zero 2 (src/ez2_engine.cpp).
-    cpp_args += '-DPROXY_GAME_EZ2'
+    cpp_args += ['-DPROXY_GAME_EZ2', '-DPROXY_STOCK_ENGINE']
+    sources += ['src/ez2_engine.cpp']
+    def_file = 'shaderapidx9_hl2rtx.def'
+  elif game == 'bms'
+    # Black Mesa: a stock engine as Entropy : Zero 2's (src/ez2_engine.cpp).
+    cpp_args += ['-DPROXY_GAME_BMS', '-DPROXY_STOCK_ENGINE']
     sources += ['src/ez2_engine.cpp']
     def_file = 'shaderapidx9_hl2rtx.def'
   endif
