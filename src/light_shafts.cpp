@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "bsp_world.h"
 #include "diag.h"
 #include "engine_materials.h"
 #include "game.h"
@@ -304,6 +305,7 @@ bool capture(const remix::Draw &d) {
   static thread_local std::vector<Sample> samples;
   samples.clear();
   float lo = 1e30f, hi = -1e30f;
+  bool texelsRead = false;
   for (uint32_t i = 0; i < d.numVertices && samples.size() < 4096; ++i) {
     const uint64_t at = uint64_t(ps.offset) + uint64_t(int64_t(d.baseVertex) + d.minIndex + i) * ps.stride;
     if (at + pos->Offset + 12 > ps.size)
@@ -333,9 +335,11 @@ bool capture(const remix::Draw &d) {
       float t[2], texel3[3];
       if (us.data && c + uv->Offset + 8 <= us.size) {
         std::memcpy(t, us.data + c + uv->Offset, 8);
-        if (texel(d.texture0, t[0], t[1], texel3))
+        if (texel(d.texture0, t[0], t[1], texel3)) {
+          texelsRead = true;
           for (int k = 0; k < 3; ++k)
             rgb[k] *= texel3[k];
+        }
       }
     }
     std::copy_n(rgb, 3, s.rgb);
@@ -349,6 +353,25 @@ bool capture(const remix::Draw &d) {
   Fit f;
   if (!((hi - lo > .25f && fitByFade(samples, (lo + hi) * .5f, f)) || fitByBounds(samples, f)))
     return false;
+  // Texels not read at the vertices (no CPU copy of the texture): the sheet's
+  // mean colour instead, its base texture's times its second's
+  // (UnlitTwoTexture: a mask times dust), and their alpha where the draw
+  // blends by it. A ray texture is mostly dark: taken as white it glowed
+  // several times too bright.
+  float mean[3] = {1, 1, 1};
+  if (!texelsRead) {
+    const std::string names[2] = {engine_materials::current().base, engine_materials::currentTextureName("$texture2")};
+    for (const auto &name : names) {
+      float rgba[4];
+      if (name.empty() || !bsp::textureMeanColor(name, rgba))
+        continue;
+      const float a = d.srcBlend == D3DBLEND_SRCALPHA ? rgba[3] : 1;
+      for (int c = 0; c < 3; ++c)
+        mean[c] *= rgba[c] * a;
+    }
+    for (int c = 0; c < 3; ++c)
+      f.color[c] *= mean[c];
+  }
   // The glow per world unit at the near cap: what the sheet adds there seen
   // side-on (both faces without culling) over the thickness seen through.
   const float strength = settings().strength;
@@ -377,11 +400,11 @@ bool capture(const remix::Draw &d) {
   const char *name = engine_materials::currentName();
   if (logged.size() < 64 && logged.emplace(name ? name : "", d.numVertices).second)
     diag::stage("light shaft '%s' (%s, %u vertices, cull %u): %s fit, origin (%.0f %.0f %.0f) axis (%.0f %.0f %.0f) "
-                "near %.1f x %.1f far %.1f x %.1f, brightness %.2f to %.2f, colour (%.2f %.2f %.2f), radiance %.4f",
+                "near %.1f x %.1f far %.1f x %.1f, brightness %.2f to %.2f, colour (%.2f %.2f %.2f)%s, radiance %.4f",
                 name ? name : "?", engine_materials::bound().shader, d.numVertices, unsigned(d.cullMode),
                 hi - lo > .25f ? "fade" : "bounds", f.origin.x, f.origin.y, f.origin.z, f.axis.x, f.axis.y, f.axis.z,
                 f.nearU, f.nearV, f.farU, f.farV, f.nearBright, f.farBright, f.color[0], f.color[1], f.color[2],
-                s.radiance.x);
+                texelsRead ? " from texels" : " from texture means", s.radiance.x);
   return true;
 }
 
