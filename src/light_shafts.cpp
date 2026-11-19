@@ -308,24 +308,24 @@ bool beamFromSpotlight(const std::vector<Sample> &samples, remixapi_VolumeShaftE
   const auto &lights = bsp::spotlights();
   if (lights.empty() || samples.empty())
     return false;
-  Vec centre{};
-  for (const auto &x : samples)
-    centre = centre + x.p;
-  centre = centre * (1.f / float(samples.size()));
+  // Its spotlight: the one its nearest vertex lies closest to (a beam starts at
+  // its spotlight; neighbouring spotlights' cones overlap), with the vertices
+  // mostly ahead of it.
   int best = -1;
   float bestDistance = 1e30f;
   for (size_t i = 0; i < lights.size(); ++i) {
     const auto &l = lights[i];
     const Vec o{l.origin[0], l.origin[1], l.origin[2]}, dir{l.direction[0], l.direction[1], l.direction[2]};
-    const Vec d = centre - o;
-    const float t = dot(d, dir);
-    if (t < -l.width || t > l.length + l.width)
+    float nearest = 1e30f, ahead = 0;
+    for (const auto &x : samples) {
+      const Vec d = x.p - o;
+      nearest = std::min(nearest, length(d));
+      ahead += dot(d, dir) >= -8 ? 1.f : 0.f;
+    }
+    if (ahead < .75f * float(samples.size()) || nearest > std::max(64.f, .25f * l.length))
       continue;
-    const float across = length(d - dir * t);
-    if (across > l.width + std::max(t, 0.f) && across > l.width * 2)
-      continue;
-    if (across < bestDistance)
-      bestDistance = across, best = int(i);
+    if (nearest < bestDistance)
+      bestDistance = nearest, best = int(i);
   }
   if (best < 0)
     return false;
@@ -336,17 +336,31 @@ bool beamFromSpotlight(const std::vector<Sample> &samples, remixapi_VolumeShaftE
   g_spotlightsSent.push_back(uint32_t(best));
   const auto &l = lights[size_t(best)];
   const Vec o{l.origin[0], l.origin[1], l.origin[2]}, dir{l.direction[0], l.direction[1], l.direction[2]};
-  // The cone's widening: the steepest spread of the vertices from the axis
-  // beyond the start's half width.
-  const float startRadius = std::max(l.width * .5f, 1.f);
-  float slope = 0;
+  // Its width from the vertices, which lie on the cone's edges (each quad
+  // spans the cone across the view): the radius at each one's distance along
+  // the axis, fitted as a line (least squares). The entity's spotlightwidth
+  // is not the start's (512 on escape_02 for beams some 40 units across).
+  double st = 0, sr = 0, stt = 0, str = 0;
+  int n = 0;
   for (const auto &x : samples) {
     const Vec d = x.p - o;
     const float t = dot(d, dir);
-    if (t > l.length * .1f)
-      slope = std::max(slope, (length(d - dir * t) - startRadius) / t);
+    if (t < 0 || t > l.length * 1.05f)
+      continue;
+    const float r = length(d - dir * t);
+    st += t, sr += r, stt += double(t) * t, str += double(t) * r;
+    ++n;
   }
-  const float endRadius = std::max(startRadius, startRadius + std::min(slope, 2.f) * l.length);
+  float startRadius = 8, endRadius = 8;
+  if (n >= 2) {
+    const double det = n * stt - st * st;
+    const double b = std::fabs(det) > 1e-6 ? (n * str - st * sr) / det : 0;
+    const double a = (sr - b * st) / n;
+    startRadius = float(std::max(a, 2.0));
+    endRadius = float(std::max(a + b * l.length, double(startRadius)));
+  } else if (n == 1) {
+    startRadius = endRadius = float(std::max(sr, 2.0));
+  }
   Fit f;
   f.origin = o;
   f.axis = dir * l.length;
