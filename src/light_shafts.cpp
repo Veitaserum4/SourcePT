@@ -293,8 +293,20 @@ uint32_t lastCount() { return g_lastCount.load(); }
 bool capture(const remix::Draw &d) {
   if (!settings().enabled || !d.blend || d.dstBlend != D3DBLEND_ONE || !d.mainTarget || !d.elements || !drawShafts())
     return false;
-  if (!shaftMaterial(engine_materials::currentName()))
+  if (!shaftMaterial(engine_materials::currentName())) {
+    // Other additive draws, each material once (shaderapi_proxy_diag.log): the
+    // names to look for when a map's shafts are not picked up.
+    static std::set<std::string> seen;
+    const char *other = engine_materials::currentName();
+    if (seen.size() < 128 && other && *other && seen.insert(other).second) {
+      const auto *p = element(d.elements, D3DDECLUSAGE_POSITION, 0);
+      diag::stage("additive draw '%s' (%s, %u vertices, %u primitives, position type %d, src blend %u): not a "
+                  "light shaft",
+                  other, engine_materials::bound().shader, d.numVertices, d.primCount, p ? int(p->Type) : -1,
+                  unsigned(d.srcBlend));
+    }
     return false;
+  }
   const auto *pos = element(d.elements, D3DDECLUSAGE_POSITION, 0);
   if (!pos || pos->Type != D3DDECLTYPE_FLOAT3 || !d.vsConstants)
     return false;
@@ -388,7 +400,11 @@ bool capture(const remix::Draw &d) {
                 linear(f.color[2]) * hue[2] * scale};
   s.farFade = f.nearBright > 0 ? f.farBright / f.nearBright : 1;
   s.softness = .5f;
-  s.shape = REMIXAPI_VOLUME_SHAFT_BOX_EXT;
+  // A beam (a point_spotlight's, drawn as a camera-facing strip) is round: the
+  // cone inscribed in the fitted box. Model shafts (vol_light) are boxes.
+  const char *material = engine_materials::currentName();
+  s.shape = material && _strnicmp(material, "sprites/", 8) == 0 ? REMIXAPI_VOLUME_SHAFT_ELLIPSE_EXT
+                                                                : REMIXAPI_VOLUME_SHAFT_BOX_EXT;
   s.flags = shadows ? REMIXAPI_VOLUME_SHAFT_SHADOWED_EXT : 0;
   g_frame.push_back(s);
   // Each material and vertex count once (shaderapi_proxy_diag.log): what was fitted.
