@@ -9,9 +9,12 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "diag.h"
 #include "engine_materials.h"
 #include "game.h"
 #include "remix_output.h"
@@ -369,6 +372,16 @@ bool capture(const remix::Draw &d) {
   s.shape = REMIXAPI_VOLUME_SHAFT_BOX_EXT;
   s.flags = shadows ? REMIXAPI_VOLUME_SHAFT_SHADOWED_EXT : 0;
   g_frame.push_back(s);
+  // Each material and vertex count once (shaderapi_proxy_diag.log): what was fitted.
+  static std::set<std::pair<std::string, uint32_t>> logged;
+  const char *name = engine_materials::currentName();
+  if (logged.size() < 64 && logged.emplace(name ? name : "", d.numVertices).second)
+    diag::stage("light shaft '%s' (%s, %u vertices, cull %u): %s fit, origin (%.0f %.0f %.0f) axis (%.0f %.0f %.0f) "
+                "near %.1f x %.1f far %.1f x %.1f, brightness %.2f to %.2f, colour (%.2f %.2f %.2f), radiance %.4f",
+                name ? name : "?", engine_materials::bound().shader, d.numVertices, unsigned(d.cullMode),
+                hi - lo > .25f ? "fade" : "bounds", f.origin.x, f.origin.y, f.origin.z, f.axis.x, f.axis.y, f.axis.z,
+                f.nearU, f.nearV, f.farU, f.farV, f.nearBright, f.farBright, f.color[0], f.color[1], f.color[2],
+                s.radiance.x);
   return true;
 }
 
@@ -376,6 +389,9 @@ void submit() {
   if (auto draw = drawShafts(); draw && !g_frame.empty())
     draw(g_frame.data(), uint32_t(g_frame.size()));
   g_lastCount = uint32_t(g_frame.size());
+  static uint32_t frames = 0;
+  if (!g_frame.empty() && ++frames % 600 == 1)
+    diag::stage("light shafts: %zu this frame (the runtime draws the nearest 32)", g_frame.size());
   g_frame.clear();
 }
 
