@@ -67,13 +67,26 @@ const std::vector<std::string> &prefixes() {
   return list;
 }
 
-bool shaftMaterial(const char *name) {
-  if (!name || !*name)
+// The material names as the engine binds them: a sprite drawn with a render
+// mode is a copy named "materials/sprites/x_rendermode_5"; the "materials/" is
+// dropped before matching.
+const char *shaftName(const char *name) {
+  if (!name)
+    return "";
+  return _strnicmp(name, "materials/", 10) == 0 ? name + 10 : name;
+}
+
+bool shaftMaterial(const char *name, uint32_t primitives) {
+  name = shaftName(name);
+  if (!*name)
     return false;
   for (const auto &p : prefixes())
     if (_strnicmp(name, p.c_str(), p.size()) == 0)
       return true;
-  return false;
+  // point_spotlight's beam (sprites/glow_test02, the halo at the lamp being
+  // sprites/light_glow03): a strip of segments; the same sprite as a lone
+  // quad (2 triangles) is a glow, not a beam.
+  return primitives > 2 && _strnicmp(name, "sprites/glow_test02", 19) == 0;
 }
 
 const D3DVERTEXELEMENT9 *element(const D3DVERTEXELEMENT9 *e, BYTE usage, BYTE index) {
@@ -293,7 +306,7 @@ uint32_t lastCount() { return g_lastCount.load(); }
 bool capture(const remix::Draw &d) {
   if (!settings().enabled || !d.blend || d.dstBlend != D3DBLEND_ONE || !d.mainTarget || !d.elements || !drawShafts())
     return false;
-  if (!shaftMaterial(engine_materials::currentName())) {
+  if (!shaftMaterial(engine_materials::currentName(), d.primCount)) {
     // Other additive draws, each material once (shaderapi_proxy_diag.log): the
     // names to look for when a map's shafts are not picked up.
     static std::set<std::string> seen;
@@ -403,7 +416,7 @@ bool capture(const remix::Draw &d) {
   // A beam (a point_spotlight's, drawn as a camera-facing strip) is round: the
   // cone inscribed in the fitted box. Model shafts (vol_light) are boxes.
   const char *material = engine_materials::currentName();
-  s.shape = material && _strnicmp(material, "sprites/", 8) == 0 ? REMIXAPI_VOLUME_SHAFT_ELLIPSE_EXT
+  s.shape = _strnicmp(shaftName(material), "sprites/", 8) == 0 ? REMIXAPI_VOLUME_SHAFT_ELLIPSE_EXT
                                                                 : REMIXAPI_VOLUME_SHAFT_BOX_EXT;
   s.flags = shadows ? REMIXAPI_VOLUME_SHAFT_SHADOWED_EXT : 0;
   g_frame.push_back(s);
