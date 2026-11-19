@@ -48,7 +48,7 @@ float envFloat(const char *name, float fallback) {
 // Material names (prefixes, any case) of Source's fake light shafts.
 const std::vector<std::string> &prefixes() {
   static const std::vector<std::string> list = [] {
-    std::vector<std::string> l = {"models/effects/vol_light", "sprites/spotlight", "sprites/blueshaft",
+    std::vector<std::string> l = {"models/effects/vol_light", "sprites/blueshaft",
                                   "effects/lightshaft",       "effects/light_rays", "effects/lightrays",
                                   "effects/godray",           "effects/vol_light",  "effects/volumetric"};
     char extra[1024] = {};
@@ -77,18 +77,14 @@ const char *shaftName(const char *name) {
   return _strnicmp(name, "materials/", 10) == 0 ? name + 10 : name;
 }
 
-bool shaftMaterial(const char *name, uint32_t primitives) {
+bool shaftMaterial(const char *name) {
   name = shaftName(name);
   if (!*name)
     return false;
   for (const auto &p : prefixes())
     if (_strnicmp(name, p.c_str(), p.size()) == 0)
       return true;
-  // point_spotlight's beam (sprites/glow_test02, the halo at the lamp being
-  // sprites/light_glow03): a strip of segments; the same sprite as a lone
-  // quad (2 triangles) is a glow, not a beam.
-  (void)primitives;
-  return _strnicmp(name, "sprites/glow_test02", 19) == 0;
+  return false;
 }
 
 const D3DVERTEXELEMENT9 *element(const D3DVERTEXELEMENT9 *e, BYTE usage, BYTE index) {
@@ -286,110 +282,6 @@ bool fitByBounds(const std::vector<Sample> &s, Fit &f) {
 }
 
 std::atomic<uint32_t> g_lastCount{0};
-// The map's spotlights sent this frame (one shaft each, however many draws
-// make up its beam).
-std::vector<uint32_t> g_spotlightsSent;
-
-bool isBeam(const char *material) {
-  const char *n = shaftName(material);
-  return _strnicmp(n, "sprites/", 8) == 0;
-}
-
-// A point_spotlight's beam (sprites/glow_test02, sprites/spotlight): the
-// engine rebuilds it every frame as a fan of camera-facing quads, only the
-// sides in view, so its shape cannot be fitted from them (as the view turned
-// it became a wall). The map's entity gives it instead: the spotlight whose
-// cone holds the draw's vertices, its origin, direction and length; the
-// width at its end from how far the vertices spread from its axis. It fades
-// to nothing at its end, as the engine's beam does. False: no spotlight holds
-// it (a beam of no map entity), drawn as before.
-bool beamFromSpotlight(const std::vector<Sample> &samples, remixapi_VolumeShaftEXT &out, bool &duplicate) {
-  duplicate = false;
-  const auto &lights = bsp::spotlights();
-  if (lights.empty() || samples.empty())
-    return false;
-  // Its spotlight: the one its nearest vertex lies closest to (a beam starts at
-  // its spotlight; neighbouring spotlights' cones overlap), with the vertices
-  // mostly ahead of it.
-  int best = -1;
-  float bestDistance = 1e30f;
-  for (size_t i = 0; i < lights.size(); ++i) {
-    const auto &l = lights[i];
-    const Vec o{l.origin[0], l.origin[1], l.origin[2]}, dir{l.direction[0], l.direction[1], l.direction[2]};
-    float nearest = 1e30f, ahead = 0;
-    for (const auto &x : samples) {
-      const Vec d = x.p - o;
-      nearest = std::min(nearest, length(d));
-      ahead += dot(d, dir) >= -8 ? 1.f : 0.f;
-    }
-    if (ahead < .75f * float(samples.size()) || nearest > std::max(64.f, .25f * l.length))
-      continue;
-    if (nearest < bestDistance)
-      bestDistance = nearest, best = int(i);
-  }
-  if (best < 0)
-    return false;
-  if (std::find(g_spotlightsSent.begin(), g_spotlightsSent.end(), uint32_t(best)) != g_spotlightsSent.end()) {
-    duplicate = true;
-    return true;
-  }
-  g_spotlightsSent.push_back(uint32_t(best));
-  const auto &l = lights[size_t(best)];
-  const Vec o{l.origin[0], l.origin[1], l.origin[2]}, dir{l.direction[0], l.direction[1], l.direction[2]};
-  // Its width from the vertices, which lie on the cone's edges (each quad
-  // spans the cone across the view): the radius at each one's distance along
-  // the axis, fitted as a line (least squares). The entity's spotlightwidth
-  // is not the start's (512 on escape_02 for beams some 40 units across).
-  double st = 0, sr = 0, stt = 0, str = 0;
-  int n = 0;
-  for (const auto &x : samples) {
-    const Vec d = x.p - o;
-    const float t = dot(d, dir);
-    if (t < 0 || t > l.length * 1.05f)
-      continue;
-    const float r = length(d - dir * t);
-    st += t, sr += r, stt += double(t) * t, str += double(t) * r;
-    ++n;
-  }
-  float startRadius = 8, endRadius = 8;
-  if (n >= 2) {
-    const double det = n * stt - st * st;
-    const double b = std::fabs(det) > 1e-6 ? (n * str - st * sr) / det : 0;
-    const double a = (sr - b * st) / n;
-    startRadius = float(std::max(a, 2.0));
-    endRadius = float(std::max(a + b * l.length, double(startRadius)));
-  } else if (n == 1) {
-    startRadius = endRadius = float(std::max(sr, 2.0));
-  }
-  Fit f;
-  f.origin = o;
-  f.axis = dir * l.length;
-  frameAcross(f);
-  remixapi_VolumeShaftEXT s = {};
-  s.sType = REMIXAPI_STRUCT_TYPE_VOLUME_SHAFT_EXT;
-  s.origin = f3(o);
-  s.axis = f3(f.axis);
-  s.halfU = f3(f.u * startRadius);
-  s.halfV = f3(f.v * startRadius);
-  s.farScaleU = s.farScaleV = endRadius / startRadius;
-  constexpr float kBase = .05f;
-  const float scale = kBase * settings().beamStrength / (2 * startRadius) / .75f;
-  auto linear = [](float c) { return std::pow(std::max(c, 0.f), 2.2f); };
-  s.radiance = {linear(l.color[0]) * scale, linear(l.color[1]) * scale, linear(l.color[2]) * scale};
-  s.farFade = 0;
-  s.softness = .5f;
-  s.shape = REMIXAPI_VOLUME_SHAFT_ELLIPSE_EXT;
-  s.flags = settings().shadows ? REMIXAPI_VOLUME_SHAFT_SHADOWED_EXT : 0;
-  out = s;
-  static std::set<uint32_t> logged;
-  if (logged.size() < 64 && logged.insert(uint32_t(best)).second)
-    diag::stage("spotlight beam %d: origin (%.0f %.0f %.0f) direction (%.2f %.2f %.2f) length %.0f, radius %.1f to %.1f, "
-                "colour (%.2f %.2f %.2f)",
-                best, o.x, o.y, o.z, dir.x, dir.y, dir.z, l.length, startRadius, endRadius, l.color[0], l.color[1],
-                l.color[2]);
-  return true;
-}
-
 } // namespace
 
 Settings &settings() {
@@ -398,7 +290,6 @@ Settings &settings() {
     s.enabled = !envOff("OPENREMIX_PROXY_LIGHT_SHAFTS");
     s.shadows = !envOff("OPENREMIX_PROXY_LIGHT_SHAFT_SHADOWS");
     s.strength = envFloat("OPENREMIX_PROXY_LIGHT_SHAFT_STRENGTH", 1);
-    s.beamStrength = envFloat("OPENREMIX_PROXY_LIGHT_BEAM_STRENGTH", 1);
     return true;
   }();
   (void)initialised;
@@ -412,7 +303,7 @@ uint32_t lastCount() { return g_lastCount.load(); }
 bool capture(const remix::Draw &d) {
   if (!settings().enabled || !d.blend || d.dstBlend != D3DBLEND_ONE || !d.mainTarget || !d.elements || !drawShafts())
     return false;
-  if (!shaftMaterial(engine_materials::currentName(), d.primCount)) {
+  if (!shaftMaterial(engine_materials::currentName())) {
     // Other additive draws, each material once (shaderapi_proxy_diag.log): the
     // names to look for when a map's shafts are not picked up.
     static std::set<std::string> seen;
@@ -481,15 +372,6 @@ bool capture(const remix::Draw &d) {
   }
   if (samples.size() < 3)
     return false;
-  if (isBeam(engine_materials::currentName())) {
-    remixapi_VolumeShaftEXT beamShaft;
-    bool duplicate = false;
-    if (!beamFromSpotlight(samples, beamShaft, duplicate))
-      return false;
-    if (!duplicate)
-      g_frame.push_back(beamShaft);
-    return true;
-  }
   Fit f;
   if (!((hi - lo > .25f && fitByFade(samples, (lo + hi) * .5f, f)) || fitByBounds(samples, f)))
     return false;
@@ -516,18 +398,7 @@ bool capture(const remix::Draw &d) {
   // texture's sheet adds on average, seen side-on) over the thickness seen
   // through, both faces when not culled, the sides' soft fade made up for.
   constexpr float kBase = .05f;
-  // A beam (a point_spotlight's, sprites/): its vertex colours are its render
-  // colour times its fade, dim (0.1) however bright the game shows it: taken
-  // relative to their brightest (the fade and tint), its strength its own.
-  const char *material = engine_materials::currentName();
-  const bool beam = _strnicmp(shaftName(material), "sprites/", 8) == 0;
-  if (beam) {
-    const float top = std::max({f.color[0], f.color[1], f.color[2]});
-    if (top > 1e-4f)
-      for (float &c : f.color)
-        c /= top;
-  }
-  const float strength = beam ? settings().beamStrength.load() : settings().strength.load();
+  const float strength = settings().strength;
   const bool shadows = settings().shadows;
   const float faces = d.cullMode == D3DCULL_NONE ? 2.f : 1.f;
   const float thickness = std::max(f.nearU + f.nearV, 1e-3f);
@@ -546,10 +417,7 @@ bool capture(const remix::Draw &d) {
                 linear(f.color[2]) * hue[2] * scale};
   s.farFade = f.nearBright > 0 ? f.farBright / f.nearBright : 1;
   s.softness = .5f;
-  // A beam (a point_spotlight's, drawn as a camera-facing strip) is round: the
-  // cone inscribed in the fitted box. Model shafts (vol_light) are boxes.
-  s.shape = _strnicmp(shaftName(material), "sprites/", 8) == 0 ? REMIXAPI_VOLUME_SHAFT_ELLIPSE_EXT
-                                                                : REMIXAPI_VOLUME_SHAFT_BOX_EXT;
+  s.shape = REMIXAPI_VOLUME_SHAFT_BOX_EXT;
   s.flags = shadows ? REMIXAPI_VOLUME_SHAFT_SHADOWED_EXT : 0;
   g_frame.push_back(s);
   // Each material and vertex count once (shaderapi_proxy_diag.log): what was fitted.
@@ -570,7 +438,6 @@ void submit() {
   if (auto draw = drawShafts(); draw && !g_frame.empty())
     draw(g_frame.data(), uint32_t(g_frame.size()));
   g_lastCount = uint32_t(g_frame.size());
-  g_spotlightsSent.clear();
   static uint32_t frames = 0;
   if (!g_frame.empty() && ++frames % 600 == 1)
     diag::stage("light shafts: %zu this frame (the runtime draws the nearest 32)", g_frame.size());

@@ -460,7 +460,7 @@ void drawShaftSettings() {
   if (g_ui.checkbox("Light shafts as volumes", &on))
     s.enabled = on != 0;
   if (g_ui.isItemHovered(0))
-    g_ui.setTooltip("The map's fake light shafts (vol_light cones, spotlight beams) as glowing air: brighter seen "
+    g_ui.setTooltip("The map's fake light shafts (vol_light cones and the like) as glowing air: brighter seen "
                     "through more of them, cut softly by walls. Off: the game's sheets.");
   if (on) {
     float strength = s.strength;
@@ -468,11 +468,6 @@ void drawShaftSettings() {
       s.strength = strength;
     if (g_ui.isItemHovered(0))
       g_ui.setTooltip("How brightly the shafts glow; 1 matches the game's sheet seen side-on at its source.");
-    float beam = s.beamStrength;
-    if (g_ui.sliderFloat("Spotlight beam strength", &beam, 0, 10, "%.2f"))
-      s.beamStrength = beam;
-    if (g_ui.isItemHovered(0))
-      g_ui.setTooltip("How brightly point_spotlight beams glow, apart from the other light shafts.");
     int shadows = s.shadows;
     if (g_ui.checkbox("Light shaft shadows", &shadows))
       s.shadows = shadows != 0;
