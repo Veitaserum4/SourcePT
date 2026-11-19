@@ -20,6 +20,7 @@
 #include "fixed_function.h"
 #include "game.h"
 #include "host_passes.h"
+#include "light_shafts.h"
 #ifdef PROXY_GAME_L4D2
 #include "l4d2.h"
 #endif
@@ -5971,6 +5972,9 @@ void onDraw(const Draw &d) {
     ++g_portalViewStats.worldDropped;
     return;
   }
+  // A fake light shaft (light_shafts.h): drawn as glowing air, not as its sheet.
+  if (light_shafts::capture(d))
+    return;
   // ShatteredGlass (a broken func_breakable_surf): each piece binds a shape
   // mask as $basetexture (the BreakableSurface proxy's models/brokenglass/
   // glassbroken_*: white, the shape in alpha, on TEXCOORD0) and the glass
@@ -8880,6 +8884,7 @@ void onPresent() {
     *reinterpret_cast<volatile int *>(uintptr_t(0x10)) = 1;
   }
   sendSceneFog();
+  light_shafts::submit();
   hostpass::submit(g_dumpFlat);
   remixapi_ErrorCode presentResult;
   {

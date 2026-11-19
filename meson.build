@@ -57,7 +57,7 @@ foreach shader : ['host_depth.vert', 'host_depth.frag', 'host_frame_depth.frag']
 endforeach
 
 sources = [
-  'src/main.cpp', 'src/vtable_proxy.cpp', 'src/d3d_hooks.cpp', 'src/remix_output.cpp', 'src/texture_formats.cpp',
+  'src/main.cpp', 'src/vtable_proxy.cpp', 'src/d3d_hooks.cpp', 'src/remix_output.cpp', 'src/light_shafts.cpp', 'src/texture_formats.cpp',
   'src/dxvk_hash.cpp', 'src/texture_categories.cpp', 'src/source_fs.cpp', 'src/bsp_world.cpp',
   'src/refract_material.cpp', 'src/refract_native.cpp', 'src/cubemap_overrides.cpp',
   'src/engine_materials.cpp', 'src/material_shading.cpp', 'src/pbr_rules.cpp',
