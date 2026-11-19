@@ -200,67 +200,99 @@ bool fitByFade(const std::vector<Sample> &s, float threshold, Fit &f) {
   return true;
 }
 
+// Along the mesh's main direction (its principal axis: a diagonal shaft is
+// not along a world axis), the vertices within 15% of each extreme its caps;
+// the brighter end, else the narrower one, the near cap.
 bool fitByBounds(const std::vector<Sample> &s, Fit &f) {
-  Vec lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
+  Vec mean{};
   for (const auto &x : s)
-    lo = {std::min(lo.x, x.p.x), std::min(lo.y, x.p.y), std::min(lo.z, x.p.z)},
-    hi = {std::max(hi.x, x.p.x), std::max(hi.y, x.p.y), std::max(hi.z, x.p.z)};
-  const Vec size = hi - lo;
-  const float sz[3] = {size.x, size.y, size.z};
-  const int a = sz[0] >= sz[1] && sz[0] >= sz[2] ? 0 : sz[1] >= sz[2] ? 1 : 2;
-  if (sz[a] < 1e-3f)
+    mean = mean + x.p;
+  mean = mean * (1.f / float(s.size()));
+  float c[3][3] = {};
+  for (const auto &x : s) {
+    const Vec d = x.p - mean;
+    const float v[3] = {d.x, d.y, d.z};
+    for (int i = 0; i < 3; ++i)
+      for (int j = 0; j < 3; ++j)
+        c[i][j] += v[i] * v[j];
+  }
+  // Power iteration from the vertex farthest from the centre.
+  Vec axis{1, 0, 0};
+  float farthest = -1;
+  for (const auto &x : s)
+    if (const float d = dot(x.p - mean, x.p - mean); d > farthest)
+      farthest = d, axis = x.p - mean;
+  if (farthest < 1e-6f)
     return false;
-  auto coord = [](Vec p, int i) { return i == 0 ? p.x : i == 1 ? p.y : p.z; };
+  for (int it = 0; it < 32; ++it) {
+    const Vec next{c[0][0] * axis.x + c[0][1] * axis.y + c[0][2] * axis.z,
+                   c[1][0] * axis.x + c[1][1] * axis.y + c[1][2] * axis.z,
+                   c[2][0] * axis.x + c[2][1] * axis.y + c[2][2] * axis.z};
+    const float n = length(next);
+    if (n < 1e-12f)
+      break;
+    axis = next * (1 / n);
+  }
+  float lo = 1e30f, hi = -1e30f;
+  for (const auto &x : s) {
+    const float t = dot(x.p - mean, axis);
+    lo = std::min(lo, t), hi = std::max(hi, t);
+  }
+  const float span = hi - lo;
+  if (span < 1e-3f)
+    return false;
   struct End {
-    Vec lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
-    float bright = 0, rgb[3] = {};
+    Vec sum{};
+    float bright = 0, rgb[3] = {}, width = 0;
     int n = 0;
   } ends[2];
+  auto endOf = [&](const Sample &x) {
+    const float t = (dot(x.p - mean, axis) - lo) / span;
+    return t <= .15f ? 0 : t >= .85f ? 1 : -1;
+  };
   for (const auto &x : s) {
-    const float t = (coord(x.p, a) - coord(lo, a)) / sz[a];
-    const int e = t <= .1f ? 0 : t >= .9f ? 1 : -1;
+    const int e = endOf(x);
     if (e < 0)
       continue;
-    End &end = ends[e];
-    end.lo = {std::min(end.lo.x, x.p.x), std::min(end.lo.y, x.p.y), std::min(end.lo.z, x.p.z)};
-    end.hi = {std::max(end.hi.x, x.p.x), std::max(end.hi.y, x.p.y), std::max(end.hi.z, x.p.z)};
-    end.bright += x.bright;
-    for (int c = 0; c < 3; ++c)
-      end.rgb[c] += x.rgb[c];
-    ++end.n;
+    ends[e].sum = ends[e].sum + x.p;
+    ends[e].bright += x.bright;
+    for (int k = 0; k < 3; ++k)
+      ends[e].rgb[k] += x.rgb[k];
+    ++ends[e].n;
   }
   if (!ends[0].n || !ends[1].n)
     return false;
-  for (auto &e : ends)
-    e.bright /= e.n;
-  const float w0 = length(ends[0].hi - ends[0].lo), w1 = length(ends[1].hi - ends[1].lo);
+  Vec centre[2];
+  for (int e = 0; e < 2; ++e) {
+    centre[e] = ends[e].sum * (1.f / float(ends[e].n));
+    ends[e].bright /= float(ends[e].n);
+  }
+  for (const auto &x : s)
+    if (const int e = endOf(x); e >= 0) {
+      const Vec d = x.p - centre[e];
+      const Vec across = d - axis * dot(d, axis);
+      ends[e].width = std::max(ends[e].width, length(across));
+    }
   const int nearEnd = std::fabs(ends[0].bright - ends[1].bright) > .05f ? (ends[0].bright > ends[1].bright ? 0 : 1)
-                                                                       : (w0 <= w1 ? 0 : 1);
+                                                                       : (ends[0].width <= ends[1].width ? 0 : 1);
   const End &n = ends[nearEnd], &fa = ends[1 - nearEnd];
-  f.origin = (n.lo + n.hi) * .5f;
-  f.axis = (fa.lo + fa.hi) * .5f - f.origin;
+  f.origin = centre[nearEnd];
+  f.axis = centre[1 - nearEnd] - f.origin;
   if (length(f.axis) < 1e-3f)
     return false;
   frameAcross(f);
-  auto extent = [&](const End &e, Vec centre, float &eu, float &ev) {
-    eu = ev = 0;
-    for (const auto &x : s) {
-      const float t = (coord(x.p, a) - coord(lo, a)) / sz[a];
-      if ((&e == &ends[0] && t > .1f) || (&e == &ends[1] && t < .9f))
-        continue;
-      const Vec d = x.p - centre;
-      eu = std::max(eu, std::fabs(dot(d, f.u)));
-      ev = std::max(ev, std::fabs(dot(d, f.v)));
+  float ext[2][2] = {};
+  for (const auto &x : s)
+    if (const int e = endOf(x); e >= 0) {
+      const Vec d = x.p - centre[e];
+      ext[e][0] = std::max(ext[e][0], std::fabs(dot(d, f.u)));
+      ext[e][1] = std::max(ext[e][1], std::fabs(dot(d, f.v)));
     }
-  };
-  float nu, nv, fu, fv;
-  extent(n, f.origin, nu, nv);
-  extent(fa, f.origin + f.axis, fu, fv);
-  setCaps(f, nu, nv, fu, fv);
+  setCaps(f, ext[nearEnd][0], ext[nearEnd][1], ext[1 - nearEnd][0], ext[1 - nearEnd][1]);
   f.nearBright = n.bright;
   f.farBright = fa.bright;
-  for (int c = 0; c < 3; ++c)
-    f.color[c] = n.rgb[c] / n.n;
+  for (int k = 0; k < 3; ++k)
+    f.color[k] = n.rgb[k] / float(n.n);
   return true;
 }
 
