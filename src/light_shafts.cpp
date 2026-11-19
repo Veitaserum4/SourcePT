@@ -97,32 +97,6 @@ struct Sample {
   float bright;
 };
 
-// The base texture's texel at `uv` (wrapped), linear-ish 0..1 (its CPU copy;
-// false when unknown).
-bool texel(const void *texture, float u, float v, float out[3]) {
-  static thread_local std::vector<uint8_t> pixels;
-  static thread_local const void *cached = nullptr;
-  static thread_local uint32_t cachedVersion = ~0u, w = 0, h = 0;
-  static thread_local bool bgra = false;
-  uint32_t width = 0, height = 0, version = 0;
-  bool isBgra = false;
-  if (!remix::texturePixels(texture, width, height, version, isBgra, nullptr) || !width || !height)
-    return false;
-  if (texture != cached || version != cachedVersion) {
-    if (!remix::texturePixels(texture, width, height, version, isBgra, &pixels) ||
-        pixels.size() < size_t(width) * height * 4)
-      return false;
-    cached = texture, cachedVersion = version, w = width, h = height, bgra = isBgra;
-  }
-  const float fu = u - std::floor(u), fv = v - std::floor(v);
-  const uint32_t x = std::min(w - 1, uint32_t(fu * w)), y = std::min(h - 1, uint32_t(fv * h));
-  const uint8_t *t = pixels.data() + (size_t(y) * w + x) * 4;
-  out[0] = (bgra ? t[2] : t[0]) / 255.f;
-  out[1] = t[1] / 255.f;
-  out[2] = (bgra ? t[0] : t[2]) / 255.f;
-  return true;
-}
-
 // Fitted along the fade (bright vertices to dark ones), else along the longest
 // side of the bounds (its narrower end the near cap): the caps' centres, their
 // extents across the axis, and the brightness at each.
@@ -325,7 +299,6 @@ bool capture(const remix::Draw &d) {
   if (!pos || pos->Type != D3DDECLTYPE_FLOAT3 || !d.vsConstants)
     return false;
   const auto *col = element(d.elements, D3DDECLUSAGE_COLOR, 0);
-  const auto *uv = element(d.elements, D3DDECLUSAGE_TEXCOORD, 0);
   const auto &ps = d.streams[pos->Stream];
   if (!ps.data || !ps.stride)
     return false;
@@ -337,7 +310,6 @@ bool capture(const remix::Draw &d) {
   static thread_local std::vector<Sample> samples;
   samples.clear();
   float lo = 1e30f, hi = -1e30f;
-  bool texelsRead = false;
   for (uint32_t i = 0; i < d.numVertices && samples.size() < 4096; ++i) {
     const uint64_t at = uint64_t(ps.offset) + uint64_t(int64_t(d.baseVertex) + d.minIndex + i) * ps.stride;
     if (at + pos->Offset + 12 > ps.size)
@@ -347,6 +319,9 @@ bool capture(const remix::Draw &d) {
     Sample s;
     s.p = {m[0] * p[0] + m[1] * p[1] + m[2] * p[2] + m[3], m[4] * p[0] + m[5] * p[1] + m[6] * p[2] + m[7],
            m[8] * p[0] + m[9] * p[1] + m[10] * p[2] + m[11]};
+    // Its vertex colour (times alpha): a beam's fade along its length. The
+    // texture is not sampled at the vertices: a cone's vertices sit on its
+    // texture's dark edges (vol_light001), which made whole shafts black.
     float rgb[3] = {1, 1, 1};
     if (col && col->Type == D3DDECLTYPE_D3DCOLOR) {
       const auto &cs = d.streams[col->Stream];
@@ -360,20 +335,6 @@ bool capture(const remix::Draw &d) {
         rgb[2] = (argb & 255) / 255.f * a;
       }
     }
-    // The texture at the vertex: a fade painted along the shaft (vol_light's).
-    if (uv && uv->Type == D3DDECLTYPE_FLOAT2 && d.texture0) {
-      const auto &us = d.streams[uv->Stream];
-      const uint64_t c = uint64_t(us.offset) + uint64_t(int64_t(d.baseVertex) + d.minIndex + i) * us.stride;
-      float t[2], texel3[3];
-      if (us.data && c + uv->Offset + 8 <= us.size) {
-        std::memcpy(t, us.data + c + uv->Offset, 8);
-        if (texel(d.texture0, t[0], t[1], texel3)) {
-          texelsRead = true;
-          for (int k = 0; k < 3; ++k)
-            rgb[k] *= texel3[k];
-        }
-      }
-    }
     std::copy_n(rgb, 3, s.rgb);
     s.bright = std::max({rgb[0], rgb[1], rgb[2]});
     lo = std::min(lo, s.bright);
@@ -385,32 +346,34 @@ bool capture(const remix::Draw &d) {
   Fit f;
   if (!((hi - lo > .25f && fitByFade(samples, (lo + hi) * .5f, f)) || fitByBounds(samples, f)))
     return false;
-  // Texels not read at the vertices (no CPU copy of the texture): the sheet's
-  // mean colour instead, its base texture's times its second's
-  // (UnlitTwoTexture: a mask times dust), and their alpha where the draw
-  // blends by it. A ray texture is mostly dark: taken as white it glowed
-  // several times too bright.
-  float mean[3] = {1, 1, 1};
-  if (!texelsRead) {
+  // Its hue: the textures' mean colour (base times $texture2) in linear light,
+  // normalised to its brightest channel. Not their brightness: a ray texture
+  // is mostly black, and its mean (or the mean's square) put shafts anywhere
+  // from blinding to invisible. The brightness is a base level times the
+  // vertex colours times the panel's strength.
+  float hue[3] = {1, 1, 1};
+  {
     const std::string names[2] = {engine_materials::current().base, engine_materials::currentTextureName("$texture2")};
     for (const auto &name : names) {
       float rgba[4];
       if (name.empty() || !bsp::textureMeanLinear(name, rgba))
         continue;
-      const float a = d.srcBlend == D3DBLEND_SRCALPHA ? rgba[3] : 1;
       for (int c = 0; c < 3; ++c)
-        mean[c] *= rgba[c] * a;
+        hue[c] *= rgba[c];
     }
+    const float top = std::max({hue[0], hue[1], hue[2]});
     for (int c = 0; c < 3; ++c)
-      f.color[c] *= mean[c];
+      hue[c] = top > 1e-6f ? hue[c] / top : 1;
   }
-  // The glow per world unit at the near cap: what the sheet adds there seen
-  // side-on (both faces without culling) over the thickness seen through.
+  // The glow per world unit at the near cap: a base level (what a ray
+  // texture's sheet adds on average, seen side-on) over the thickness seen
+  // through, both faces when not culled, the sides' soft fade made up for.
+  constexpr float kBase = .05f;
   const float strength = settings().strength;
   const bool shadows = settings().shadows;
   const float faces = d.cullMode == D3DCULL_NONE ? 2.f : 1.f;
   const float thickness = std::max(f.nearU + f.nearV, 1e-3f);
-  const float scale = faces * strength / thickness / .75f; // the sides' soft fade made up for
+  const float scale = kBase * faces * strength / thickness / .75f;
   remixapi_VolumeShaftEXT s = {};
   s.sType = REMIXAPI_STRUCT_TYPE_VOLUME_SHAFT_EXT;
   s.origin = f3(f.origin);
@@ -419,16 +382,10 @@ bool capture(const remix::Draw &d) {
   s.halfV = f3(f.v * f.nearV);
   s.farScaleU = f.farU / f.nearU;
   s.farScaleV = f.farV / f.nearV;
-  // The colour as drawn (sRGB texels and vertex colours), linearised.
-  // The colour as drawn (sRGB vertex colours and texels), linearised; a texture
-  // mean is linear already.
+  // The vertex colours as drawn (sRGB), linearised, times the hue.
   auto linear = [](float c) { return std::pow(std::max(c, 0.f), 2.2f); };
-  if (texelsRead)
-    s.radiance = {linear(f.color[0]) * scale, linear(f.color[1]) * scale, linear(f.color[2]) * scale};
-  else
-    s.radiance = {linear(f.color[0] / std::max(mean[0], 1e-6f)) * mean[0] * scale,
-                  linear(f.color[1] / std::max(mean[1], 1e-6f)) * mean[1] * scale,
-                  linear(f.color[2] / std::max(mean[2], 1e-6f)) * mean[2] * scale};
+  s.radiance = {linear(f.color[0]) * hue[0] * scale, linear(f.color[1]) * hue[1] * scale,
+                linear(f.color[2]) * hue[2] * scale};
   s.farFade = f.nearBright > 0 ? f.farBright / f.nearBright : 1;
   s.softness = .5f;
   s.shape = REMIXAPI_VOLUME_SHAFT_BOX_EXT;
@@ -439,11 +396,12 @@ bool capture(const remix::Draw &d) {
   const char *name = engine_materials::currentName();
   if (logged.size() < 64 && logged.emplace(name ? name : "", d.numVertices).second)
     diag::stage("light shaft '%s' (%s, %u vertices, cull %u): %s fit, origin (%.0f %.0f %.0f) axis (%.0f %.0f %.0f) "
-                "near %.1f x %.1f far %.1f x %.1f, brightness %.2f to %.2f, colour (%.2f %.2f %.2f)%s, radiance %.4f",
+                "near %.1f x %.1f far %.1f x %.1f, brightness %.2f to %.2f, colour (%.2f %.2f %.2f), hue (%.2f %.2f "
+                "%.2f), radiance %.4f",
                 name ? name : "?", engine_materials::bound().shader, d.numVertices, unsigned(d.cullMode),
                 hi - lo > .25f ? "fade" : "bounds", f.origin.x, f.origin.y, f.origin.z, f.axis.x, f.axis.y, f.axis.z,
-                f.nearU, f.nearV, f.farU, f.farV, f.nearBright, f.farBright, f.color[0], f.color[1], f.color[2],
-                texelsRead ? " from texels" : " from texture means", s.radiance.x);
+                f.nearU, f.nearV, f.farU, f.farV, f.nearBright, f.farBright, f.color[0], f.color[1], f.color[2], hue[0],
+                hue[1], hue[2], s.radiance.x);
   return true;
 }
 
