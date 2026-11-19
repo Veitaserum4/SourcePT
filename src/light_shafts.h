@@ -18,8 +18,8 @@ struct Draw;
 // OPENREMIX_PROXY_LIGHT_SHAFTS: 0 off (sheets as before); else extra material
 // name prefixes, ';'-separated, beside the built-in ones.
 // OPENREMIX_PROXY_LIGHT_SHAFT_STRENGTH (1): their brightness, 1 matching the
-// sheet seen side-on at its source. OPENREMIX_PROXY_LIGHT_SHAFT_SHADOWS=0: no
-// shadows.
+// sheet seen side-on at its source; OPENREMIX_PROXY_LIGHT_BEAM_STRENGTH (1)
+// the spotlight beams'. OPENREMIX_PROXY_LIGHT_SHAFT_SHADOWS=0: no shadows.
 namespace proxy::light_shafts {
 
 // The draw is a light shaft: fitted and recorded for this frame (true: the
@@ -35,6 +35,7 @@ void submit();
 struct Settings {
   std::atomic<bool> enabled{true}, shadows{true};
   std::atomic<float> strength{1};
+  std::atomic<float> beamStrength{1}; // spotlight beams (sprites/), apart from the shafts
 };
 Settings &settings();
 // The runtime has remixapi_DrawVolumeShaftsEXT (else the settings do nothing).

@@ -468,6 +468,11 @@ void drawShaftSettings() {
       s.strength = strength;
     if (g_ui.isItemHovered(0))
       g_ui.setTooltip("How brightly the shafts glow; 1 matches the game's sheet seen side-on at its source.");
+    float beam = s.beamStrength;
+    if (g_ui.sliderFloat("Spotlight beam strength", &beam, 0, 10, "%.2f"))
+      s.beamStrength = beam;
+    if (g_ui.isItemHovered(0))
+      g_ui.setTooltip("How brightly point_spotlight beams glow, apart from the other light shafts.");
     int shadows = s.shadows;
     if (g_ui.checkbox("Light shaft shadows", &shadows))
       s.shadows = shadows != 0;

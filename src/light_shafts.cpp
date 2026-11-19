@@ -19,6 +19,7 @@
 #include "engine_materials.h"
 #include "game.h"
 #include "remix_output.h"
+#include "vertex_program.h"
 
 namespace proxy::light_shafts {
 namespace {
@@ -293,6 +294,7 @@ Settings &settings() {
     s.enabled = !envOff("OPENREMIX_PROXY_LIGHT_SHAFTS");
     s.shadows = !envOff("OPENREMIX_PROXY_LIGHT_SHAFT_SHADOWS");
     s.strength = envFloat("OPENREMIX_PROXY_LIGHT_SHAFT_STRENGTH", 1);
+    s.beamStrength = envFloat("OPENREMIX_PROXY_LIGHT_BEAM_STRENGTH", 1);
     return true;
   }();
   (void)initialised;
@@ -327,9 +329,16 @@ bool capture(const remix::Draw &d) {
   const auto &ps = d.streams[pos->Stream];
   if (!ps.data || !ps.stride)
     return false;
-  // The model matrix (c58..c60, object to world rows); world-space draws
-  // (beams, dynamic meshes) have identity there.
+  // The model matrix (c58..c60, object to world rows). A shader that does not
+  // read it draws world-space positions (a Sprite's beam): the registers then
+  // hold whatever was drawn before, which placed beams anywhere.
+  static const float identity[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
   const float *m = d.vsConstants + 58 * 4;
+  if (d.vertexProgram) {
+    const auto &read = vsprog::info(*d.vertexProgram).constants;
+    if (!std::binary_search(read.begin(), read.end(), uint16_t(58)))
+      m = identity;
+  }
   if (!std::all_of(m, m + 12, [](float x) { return std::isfinite(x); }))
     return false;
   static thread_local std::vector<Sample> samples;
@@ -394,7 +403,18 @@ bool capture(const remix::Draw &d) {
   // texture's sheet adds on average, seen side-on) over the thickness seen
   // through, both faces when not culled, the sides' soft fade made up for.
   constexpr float kBase = .05f;
-  const float strength = settings().strength;
+  // A beam (a point_spotlight's, sprites/): its vertex colours are its render
+  // colour times its fade, dim (0.1) however bright the game shows it: taken
+  // relative to their brightest (the fade and tint), its strength its own.
+  const char *material = engine_materials::currentName();
+  const bool beam = _strnicmp(shaftName(material), "sprites/", 8) == 0;
+  if (beam) {
+    const float top = std::max({f.color[0], f.color[1], f.color[2]});
+    if (top > 1e-4f)
+      for (float &c : f.color)
+        c /= top;
+  }
+  const float strength = beam ? settings().beamStrength.load() : settings().strength.load();
   const bool shadows = settings().shadows;
   const float faces = d.cullMode == D3DCULL_NONE ? 2.f : 1.f;
   const float thickness = std::max(f.nearU + f.nearV, 1e-3f);
@@ -415,7 +435,6 @@ bool capture(const remix::Draw &d) {
   s.softness = .5f;
   // A beam (a point_spotlight's, drawn as a camera-facing strip) is round: the
   // cone inscribed in the fitted box. Model shafts (vol_light) are boxes.
-  const char *material = engine_materials::currentName();
   s.shape = _strnicmp(shaftName(material), "sprites/", 8) == 0 ? REMIXAPI_VOLUME_SHAFT_ELLIPSE_EXT
                                                                 : REMIXAPI_VOLUME_SHAFT_BOX_EXT;
   s.flags = shadows ? REMIXAPI_VOLUME_SHAFT_SHADOWED_EXT : 0;
