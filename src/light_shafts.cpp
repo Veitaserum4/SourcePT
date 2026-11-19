@@ -363,7 +363,7 @@ bool capture(const remix::Draw &d) {
     const std::string names[2] = {engine_materials::current().base, engine_materials::currentTextureName("$texture2")};
     for (const auto &name : names) {
       float rgba[4];
-      if (name.empty() || !bsp::textureMeanColor(name, rgba))
+      if (name.empty() || !bsp::textureMeanLinear(name, rgba))
         continue;
       const float a = d.srcBlend == D3DBLEND_SRCALPHA ? rgba[3] : 1;
       for (int c = 0; c < 3; ++c)
@@ -388,8 +388,15 @@ bool capture(const remix::Draw &d) {
   s.farScaleU = f.farU / f.nearU;
   s.farScaleV = f.farV / f.nearV;
   // The colour as drawn (sRGB texels and vertex colours), linearised.
+  // The colour as drawn (sRGB vertex colours and texels), linearised; a texture
+  // mean is linear already.
   auto linear = [](float c) { return std::pow(std::max(c, 0.f), 2.2f); };
-  s.radiance = {linear(f.color[0]) * scale, linear(f.color[1]) * scale, linear(f.color[2]) * scale};
+  if (texelsRead)
+    s.radiance = {linear(f.color[0]) * scale, linear(f.color[1]) * scale, linear(f.color[2]) * scale};
+  else
+    s.radiance = {linear(f.color[0] / std::max(mean[0], 1e-6f)) * mean[0] * scale,
+                  linear(f.color[1] / std::max(mean[1], 1e-6f)) * mean[1] * scale,
+                  linear(f.color[2] / std::max(mean[2], 1e-6f)) * mean[2] * scale};
   s.farFade = f.nearBright > 0 ? f.farBright / f.nearBright : 1;
   s.softness = .5f;
   s.shape = REMIXAPI_VOLUME_SHAFT_BOX_EXT;

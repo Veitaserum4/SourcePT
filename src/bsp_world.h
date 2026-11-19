@@ -56,6 +56,10 @@ float textureLuminance(const std::string &name);
 // A texture's mean colour and alpha as stored (0..1; sRGB values for colour
 // textures), from its VTF. False for a missing file or a format not read.
 bool textureMeanColor(const std::string &name, float rgba[4]);
+// The mean of its texels in linear light (each decoded from sRGB first), over a
+// level of at most 128 texels a side: a mostly dark texture with bright parts
+// (a light shaft's rays) averages far above its sRGB mean's square.
+bool textureMeanLinear(const std::string &name, float rgba[4]);
 // A texture's largest mip (first frame) as RGBA8, R in the lowest byte, from
 // its VTF. False for a missing file or a format not read.
 bool textureRgba(const std::string &name, uint32_t &width, uint32_t &height, std::vector<uint8_t> &rgba);

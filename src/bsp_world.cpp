@@ -550,7 +550,10 @@ bool texturePointSample(const std::string &name) {
 // A texture's mean colour, as stored (0..1, no gamma): its smallest mip, or
 // the whole image of one without mips. False for a missing file or a format
 // not read here.
-bool textureMean(const std::string &name, float rgba[4]) {
+// linear: the mean of the texels in linear light (each decoded from sRGB
+// before averaging), over a level of at most 128 texels a side; else the
+// smallest level's (the sRGB mean).
+bool textureMean(const std::string &name, float rgba[4], bool linear = false) {
   const std::string path = vtfPath(name);
 
   std::vector<uint8_t> header;
@@ -591,10 +594,17 @@ bool textureMean(const std::string &name, float rgba[4]) {
   uint64_t all = 0;
   for (uint32_t mip = 0; mip < mips; ++mip)
     all += bytesOf(mip) * std::max<uint16_t>(frames, 1) * faces;
-  const uint32_t last = mips - 1;
+  uint32_t last = mips - 1;
+  if (linear)
+    while (last > 0 && ((uint32_t(width) >> (last - 1)) <= 128 && (uint32_t(height) >> (last - 1)) <= 128))
+      --last;
+  // Smaller levels come first: the chosen one starts after them.
+  uint64_t before = 0;
+  for (uint32_t mip = mips - 1; mip > last; --mip)
+    before += bytesOf(mip) * std::max<uint16_t>(frames, 1) * faces;
   const uint32_t w = std::max(1u, uint32_t(width) >> last), h = std::max(1u, uint32_t(height) >> last);
   std::vector<uint8_t> level;
-  if (all > total || bytesOf(last) > (64u << 20) || !fs::read(path, level, total - all, bytesOf(last)) ||
+  if (all > total || bytesOf(last) > (64u << 20) || !fs::read(path, level, total - all + before, bytesOf(last)) ||
       level.size() != bytesOf(last))
     return false;
   if (blockBytes) {
@@ -606,8 +616,10 @@ bool textureMean(const std::string &name, float rgba[4]) {
   double sum[4] = {};
   const size_t pixels = size_t(w) * h;
   for (size_t i = 0; i < pixels; ++i)
-    for (int c = 0; c < 4; ++c)
-      sum[c] += order[c] < 0 ? 255.0 : double(level[i * pixelBytes + size_t(order[c])]);
+    for (int c = 0; c < 4; ++c) {
+      const double v = order[c] < 0 ? 255.0 : double(level[i * pixelBytes + size_t(order[c])]);
+      sum[c] += linear && c < 3 ? 255.0 * std::pow(v / 255.0, 2.2) : v;
+    }
   for (int c = 0; c < 4; ++c)
     rgba[c] = float(sum[c] / (255.0 * double(pixels)));
   return true;
@@ -4761,6 +4773,28 @@ bool textureRgba(const std::string &name, uint32_t &width, uint32_t &height, std
     return false;
   rgba = std::move(frames[0]);
   return true;
+}
+
+bool textureMeanLinear(const std::string &name, float rgba[4]) {
+  static std::mutex lock;
+  static std::unordered_map<std::string, std::array<float, 5>> known; // rgba, found
+  {
+    std::lock_guard<std::mutex> guard(lock);
+    if (auto it = known.find(name); it != known.end()) {
+      std::copy_n(it->second.begin(), 4, rgba);
+      return it->second[4] != 0;
+    }
+  }
+  ensureFileSystem();
+  std::array<float, 5> value = {1, 1, 1, 1, 0};
+  if (textureMean(name, value.data(), true))
+    value[4] = 1;
+  std::lock_guard<std::mutex> guard(lock);
+  if (known.size() > 8192)
+    known.clear();
+  known[name] = value;
+  std::copy_n(value.begin(), 4, rgba);
+  return value[4] != 0;
 }
 
 bool textureMeanColor(const std::string &name, float rgba[4]) {
