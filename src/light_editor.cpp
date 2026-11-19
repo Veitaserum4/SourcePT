@@ -2,6 +2,7 @@
 
 #include "bsp_world.h"
 #include "game.h"
+#include "light_shafts.h"
 
 #include <windows.h>
 
@@ -449,7 +450,38 @@ void drawControls(Entry &e) {
     setEdit(e, p);
 }
 
+// Light shafts (light_shafts.h): drawn as volumes or as the game's sheets, how
+// brightly, shadowed or not. Live.
+void drawShaftSettings() {
+  if (!light_shafts::available())
+    return;
+  auto &s = light_shafts::settings();
+  int on = s.enabled;
+  if (g_ui.checkbox("Light shafts as volumes", &on))
+    s.enabled = on != 0;
+  if (g_ui.isItemHovered(0))
+    g_ui.setTooltip("The map's fake light shafts (vol_light cones, spotlight beams) as glowing air: brighter seen "
+                    "through more of them, cut softly by walls. Off: the game's sheets.");
+  if (on) {
+    float strength = s.strength;
+    if (g_ui.sliderFloat("Light shaft strength", &strength, 0, 10, "%.2f"))
+      s.strength = strength;
+    if (g_ui.isItemHovered(0))
+      g_ui.setTooltip("How brightly the shafts glow; 1 matches the game's sheet seen side-on at its source.");
+    int shadows = s.shadows;
+    if (g_ui.checkbox("Light shaft shadows", &shadows))
+      s.shadows = shadows != 0;
+    if (g_ui.isItemHovered(0))
+      g_ui.setTooltip("What stands in a shaft casts a shadow down it (a shadow ray per sample).");
+    char text[64];
+    std::snprintf(text, sizeof(text), "%u light shafts in the last frame", light_shafts::lastCount());
+    g_ui.textColored(.6f, .6f, .6f, 1, text);
+  }
+  g_ui.separator();
+}
+
 void drawPanel(void *) {
+  drawShaftSettings();
   std::lock_guard<std::mutex> lock(g_lock);
   if (g_map.empty() || g_entries.empty()) {
     g_ui.textWrapped("Map lights: no map with lights is loaded (the BSP world provides them).");

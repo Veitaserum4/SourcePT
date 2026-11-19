@@ -1,5 +1,8 @@
 #pragma once
 
+#include <atomic>
+#include <cstdint>
+
 namespace proxy::remix {
 struct Draw;
 }
@@ -26,5 +29,17 @@ bool capture(const remix::Draw &d);
 
 // Before Present: this frame's shafts to the runtime, then cleared.
 void submit();
+
+// The developer panel's settings (light_editor's panel), live: started from
+// the environment variables above.
+struct Settings {
+  std::atomic<bool> enabled{true}, shadows{true};
+  std::atomic<float> strength{1};
+};
+Settings &settings();
+// The runtime has remixapi_DrawVolumeShaftsEXT (else the settings do nothing).
+bool available();
+// Shafts drawn last frame (the panel's status).
+uint32_t lastCount();
 
 } // namespace proxy::light_shafts

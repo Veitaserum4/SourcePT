@@ -260,11 +260,28 @@ bool fitByBounds(const std::vector<Sample> &s, Fit &f) {
   return true;
 }
 
+std::atomic<uint32_t> g_lastCount{0};
+
 } // namespace
 
+Settings &settings() {
+  static Settings s;
+  static const bool initialised = [] {
+    s.enabled = !envOff("OPENREMIX_PROXY_LIGHT_SHAFTS");
+    s.shadows = !envOff("OPENREMIX_PROXY_LIGHT_SHAFT_SHADOWS");
+    s.strength = envFloat("OPENREMIX_PROXY_LIGHT_SHAFT_STRENGTH", 1);
+    return true;
+  }();
+  (void)initialised;
+  return s;
+}
+
+bool available() { return drawShafts() != nullptr; }
+
+uint32_t lastCount() { return g_lastCount.load(); }
+
 bool capture(const remix::Draw &d) {
-  static const bool enabled = !envOff("OPENREMIX_PROXY_LIGHT_SHAFTS");
-  if (!enabled || !d.blend || d.dstBlend != D3DBLEND_ONE || !d.mainTarget || !d.elements || !drawShafts())
+  if (!settings().enabled || !d.blend || d.dstBlend != D3DBLEND_ONE || !d.mainTarget || !d.elements || !drawShafts())
     return false;
   if (!shaftMaterial(engine_materials::currentName()))
     return false;
@@ -331,8 +348,8 @@ bool capture(const remix::Draw &d) {
     return false;
   // The glow per world unit at the near cap: what the sheet adds there seen
   // side-on (both faces without culling) over the thickness seen through.
-  static const float strength = envFloat("OPENREMIX_PROXY_LIGHT_SHAFT_STRENGTH", 1);
-  static const bool shadows = !envOff("OPENREMIX_PROXY_LIGHT_SHAFT_SHADOWS");
+  const float strength = settings().strength;
+  const bool shadows = settings().shadows;
   const float faces = d.cullMode == D3DCULL_NONE ? 2.f : 1.f;
   const float thickness = std::max(f.nearU + f.nearV, 1e-3f);
   const float scale = faces * strength / thickness / .75f; // the sides' soft fade made up for
@@ -358,6 +375,7 @@ bool capture(const remix::Draw &d) {
 void submit() {
   if (auto draw = drawShafts(); draw && !g_frame.empty())
     draw(g_frame.data(), uint32_t(g_frame.size()));
+  g_lastCount = uint32_t(g_frame.size());
   g_frame.clear();
 }
 
