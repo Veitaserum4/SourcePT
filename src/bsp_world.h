@@ -60,6 +60,16 @@ bool textureMeanColor(const std::string &name, float rgba[4]);
 // level of at most 128 texels a side: a mostly dark texture with bright parts
 // (a light shaft's rays) averages far above its sRGB mean's square.
 bool textureMeanLinear(const std::string &name, float rgba[4]);
+// The map's point_spotlight entities (its entity lump): where each beam starts,
+// its direction (from angles: pitch down, yaw about z), spotlightlength,
+// spotlightwidth, and its render colour times renderamt (0..1, as stored).
+// Empty without a map. Render thread reads; loaded with the map.
+struct Spotlight {
+  float origin[3] = {}, direction[3] = {1, 0, 0};
+  float length = 500, width = 50;
+  float color[3] = {1, 1, 1};
+};
+const std::vector<Spotlight> &spotlights();
 // A texture's largest mip (first frame) as RGBA8, R in the lowest byte, from
 // its VTF. False for a missing file or a format not read.
 bool textureRgba(const std::string &name, uint32_t &width, uint32_t &height, std::vector<uint8_t> &rgba);

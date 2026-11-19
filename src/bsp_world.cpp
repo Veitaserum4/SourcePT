@@ -1073,6 +1073,7 @@ struct World {
   SkyboxImages skyboxImages;
   float playerOrigin[3] = {}, playerAngles[3] = {};
   bool skyCamera = false;
+  std::vector<Spotlight> spotlights; // point_spotlight entities (parseMapCameras)
   float skyOrigin[3] = {};
   float skyScale = 16;
   // Path-traced 3D skybox (OPENREMIX_PROXY_SKY_TRACE, default on): its faces
@@ -1243,6 +1244,30 @@ void parseMapCameras(const Bsp &bsp) {
                                          &g_world.playerOrigin[1], &g_world.playerOrigin[2]) == 3;
       std::sscanf(kv.values["angles"].c_str(), "%f %f %f", &g_world.playerAngles[0],
                   &g_world.playerAngles[1], &g_world.playerAngles[2]);
+    }
+    if (classname == "point_spotlight") {
+      Spotlight s;
+      float angles[3] = {};
+      if (std::sscanf(kv.values["origin"].c_str(), "%f %f %f", &s.origin[0], &s.origin[1], &s.origin[2]) == 3) {
+        std::sscanf(kv.values["angles"].c_str(), "%f %f %f", &angles[0], &angles[1], &angles[2]);
+        const float pitch = angles[0] * 3.14159265f / 180, yaw = angles[1] * 3.14159265f / 180;
+        s.direction[0] = std::cos(pitch) * std::cos(yaw);
+        s.direction[1] = std::cos(pitch) * std::sin(yaw);
+        s.direction[2] = -std::sin(pitch);
+        if (kv.values.count("spotlightlength"))
+          s.length = float(std::atof(kv.values["spotlightlength"].c_str()));
+        if (kv.values.count("spotlightwidth"))
+          s.width = float(std::atof(kv.values["spotlightwidth"].c_str()));
+        float rgb[3] = {255, 255, 255};
+        if (kv.values.count("rendercolor"))
+          std::sscanf(kv.values["rendercolor"].c_str(), "%f %f %f", &rgb[0], &rgb[1], &rgb[2]);
+        const float amount = kv.values.count("renderamt") ? float(std::atof(kv.values["renderamt"].c_str())) : 255;
+        for (int c = 0; c < 3; ++c)
+          s.color[c] = std::clamp(rgb[c] / 255, 0.f, 1.f) * std::clamp(amount / 255, 0.f, 1.f);
+        if (s.length > 0 && s.width > 0)
+          g_world.spotlights.push_back(s);
+      }
+      continue;
     }
     if (classname != "sky_camera" || g_world.skyCamera)
       continue;
@@ -4774,6 +4799,8 @@ bool textureRgba(const std::string &name, uint32_t &width, uint32_t &height, std
   rgba = std::move(frames[0]);
   return true;
 }
+
+const std::vector<Spotlight> &spotlights() { return g_world.spotlights; }
 
 bool textureMeanLinear(const std::string &name, float rgba[4]) {
   static std::mutex lock;
